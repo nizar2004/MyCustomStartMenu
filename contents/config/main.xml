@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+      http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+
+    <entry name="panelIcon" type="String">
+      <label>The icon shown for the widget in the panel.</label>
+      <default>dashboard-show</default>
+    </entry>
+
+    <entry name="refreshInterval" type="Int">
+      <label>How often system data refreshes, in milliseconds.</label>
+      <default>1500</default>
+    </entry>
+
+    <entry name="defaultCategory" type="String">
+      <label>Category selected when the widget opens.</label>
+      <default>all</default>
+    </entry>
+
+    <entry name="accentOverride" type="String">
+      <label>Custom accent color; empty to follow the system theme.</label>
+      <default></default>
+    </entry>
+
+    <entry name="showUserCard" type="Bool">
+      <label>Show the user avatar and name in the sidebar.</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="showSystemCard" type="Bool">
+      <label>Show the system monitor card in the sidebar.</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="showMediaCard" type="Bool">
+      <label>Show the media player card in the sidebar.</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="showPowerButtons" type="Bool">
+      <label>Show the power buttons at the bottom of the sidebar.</label>
+      <default>true</default>
+    </entry>
+
+  </group>
+</kcfg>

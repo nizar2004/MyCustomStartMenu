@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "nizar@localhost",
+                "Name": "Nizar"
+            }
+        ],
+        "Description": "Custom start menu with app launcher, system info, media controls and power buttons.",
+        "Icon": "dashboard-show",
+        "Id": "com.nizar.dashboard",
+        "License": "GPL-3.0",
+        "Name": "Custom Start Menu",
+        "Version": "1.1"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

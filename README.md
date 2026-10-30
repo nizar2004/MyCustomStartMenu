@@ -16,7 +16,19 @@ power buttons — all in one popup.
 - **System card** — uptime, memory, disk and GPU usage, click for detail.
 - **Media card** — MPRIS playback controls and album art (click the art to
   open the player).
-- **Power buttons** — lock, log out, suspend, reboot and shut down.
+- **Power buttons** — lock, log out, suspend, reboot and shut down. Reboot,
+  shut down and log out ask for a small **Yes / No confirmation** first, and
+  the pending prompt is dropped automatically when the menu closes.
+
+## Keyboard
+
+| Key | Action |
+| --- | --- |
+| type | search apps immediately |
+| `↑` `↓` `←` `→` / `Home` `End` | move the selection across the grid |
+| `Enter` | launch the selected app — or confirm a pending power action |
+| `Esc` | cancel the power prompt → drop the selection → close the menu |
+| hold a pinned tile 0.6 s | lift it to reorder (drag & drop) |
 - **Configurable** — accent colour override, default category, which cards
   are shown, refresh interval and panel icon.
 

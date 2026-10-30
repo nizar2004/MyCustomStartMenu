@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import QtQuick.Effects
+import QtQuick.Window
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PC3
@@ -17,9 +18,41 @@ Item {
         NumberAnimation { duration: 160 }
     }
 
+    // drop any pending yes/no prompt when the popup closes. The item itself
+    // stays "visible" inside the hidden window, so watch the window, not
+    // the item — otherwise the prompt would still be up on reopen.
+    readonly property var popupWindow: Window.window
+    Connections {
+        target: appsTab.popupWindow
+        function onVisibleChanged() {
+            var w = appsTab.popupWindow;
+            if (w && !w.visible) { appsTab.pendingPower = ""; }
+        }
+    }
+
     property string filter: "all"        // "all" (first) | "pinned" | category name
     property string search: ""
     property bool detailedInfo: false
+
+    // power action waiting for a yes/no confirmation
+    // "" | "logout" | "reboot" | "poweroff"
+    property string pendingPower: ""
+
+    function askPower(action) {
+        pendingPower = action;
+    }
+
+    function cancelPower() {
+        pendingPower = "";
+    }
+
+    function confirmPower() {
+        var a = pendingPower;
+        pendingPower = "";
+        if (a === "logout") { DashState.logOut(); }
+        else if (a === "reboot") { DashState.reboot(); }
+        else if (a === "poweroff") { DashState.powerOff(); }
+    }
 
     property var chips: []
     property var visibleApps: []
@@ -438,6 +471,15 @@ Item {
     // =====================================================================
     // layout: rail | apps | sidebar
     // =====================================================================
+    // sits under everything, so it only catches presses on empty space —
+    // any click elsewhere in the menu dismisses a pending confirmation
+    MouseArea {
+        anchors.fill: parent
+        z: -1
+        enabled: appsTab.pendingPower !== ""
+        onPressed: appsTab.cancelPower()
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: Kirigami.Units.gridUnit * 0.6
@@ -569,10 +611,23 @@ Item {
                 Layout.fillWidth: true
                 placeholderText: "Search apps…"
                 onTextChanged: appsTab.search = text
-                onAccepted: appsTab.launchSelected()
+                onAccepted: if (appsTab.pendingPower === "") { appsTab.launchSelected() }
 
                 Keys.onPressed: (event) => {
                     var k = event.key;
+                    // while a power confirmation is up it owns Enter/Esc
+                    if (appsTab.pendingPower !== "") {
+                        if (k === Qt.Key_Return || k === Qt.Key_Enter) {
+                            appsTab.confirmPower();
+                            event.accepted = true;
+                            return;
+                        }
+                        if (k === Qt.Key_Escape) {
+                            appsTab.cancelPower();
+                            event.accepted = true;
+                            return;
+                        }
+                    }
                     if (k === Qt.Key_Down) {
                         appsTab.moveSel("down");
                         event.accepted = true;
@@ -1224,6 +1279,116 @@ Item {
 
                 Item { Layout.fillHeight: true }
 
+                // small yes/no confirmation shown above the power buttons —
+                // styled like the sidebar cards (neutral translucent card,
+                // accent only as a tint) so it melts into the panel
+                Rectangle {
+                    id: pwrConfirm
+                    visible: appsTab.pendingPower !== ""
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: 212
+                    Layout.preferredHeight: 42
+                    opacity: visible ? 1 : 0
+                    scale: visible ? 1 : 0.94
+                    radius: 14
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.05)
+                    border.width: 1
+                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                    Behavior on opacity {
+                        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                    }
+                    Behavior on scale {
+                        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 11
+                        anchors.rightMargin: 8
+                        anchors.topMargin: 7
+                        anchors.bottomMargin: 7
+                        spacing: 8
+
+                        Kirigami.Icon {
+                            source: appsTab.pendingPower === "logout" ? "system-log-out"
+                                  : appsTab.pendingPower === "reboot" ? "system-reboot"
+                                  : "system-shutdown"
+                            isMask: true
+                            color: appsTab.accent
+                            implicitWidth: 16
+                            implicitHeight: 16
+                            opacity: 0.9
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            text: appsTab.pendingPower === "logout" ? "Log out?"
+                                : appsTab.pendingPower === "reboot" ? "Reboot?"
+                                : "Shut down?"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: Kirigami.Theme.textColor
+                        }
+
+                        // buttons reuse the PowerButton look: neutral card fill,
+                        // accent-tinted hover; "Yes" is accent-tinted as primary
+                        component ConfirmBtn: Rectangle {
+                            id: cbtn
+                            property string label
+                            property bool primary: false
+                            signal tapped()
+
+                            implicitWidth: cbtn.primary ? 46 : 38
+                            implicitHeight: 27
+                            radius: 9
+                            color: cbtn.primary
+                                   ? (cHover.hovered ? Qt.alpha(appsTab.accent, 0.30)
+                                                     : Qt.alpha(appsTab.accent, 0.16))
+                                   : (cHover.hovered ? Qt.alpha(Kirigami.Theme.textColor, 0.10)
+                                                     : Qt.alpha(Kirigami.Theme.textColor, 0.05))
+                            border.width: 1
+                            border.color: cbtn.primary
+                                          ? Qt.alpha(appsTab.accent, 0.35)
+                                          : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                            scale: cTap.pressed ? 0.92 : 1.0
+                            Behavior on color {
+                                ColorAnimation { duration: 130 }
+                            }
+                            Behavior on scale {
+                                NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+                            }
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: cbtn.label
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                                color: cbtn.primary ? appsTab.accent
+                                                    : Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                            }
+                            HoverHandler {
+                                id: cHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                            TapHandler {
+                                id: cTap
+                                onTapped: cbtn.tapped()
+                            }
+                        }
+
+                        ConfirmBtn {
+                            label: "Yes"
+                            primary: true
+                            onTapped: appsTab.confirmPower()
+                        }
+                        ConfirmBtn {
+                            label: "No"
+                            onTapped: appsTab.cancelPower()
+                        }
+                    }
+                }
+
                 // power buttons
                 Row {
                     visible: Plasmoid.configuration.showPowerButtons
@@ -1244,16 +1409,22 @@ Item {
                         id: pwrBtn
                         property string icon
                         property string tip
+                        property string action
                         signal activated()
 
                         width: 46
                         height: 40
                         radius: 12
-                        color: pwrHover.hovered
-                               ? Qt.alpha(appsTab.accent, 0.16)
-                               : Qt.alpha(Kirigami.Theme.textColor, 0.05)
+                        // stays accent-tinted while its confirmation is pending
+                        color: appsTab.pendingPower === pwrBtn.action
+                               ? Qt.alpha(appsTab.accent, 0.22)
+                               : (pwrHover.hovered
+                                  ? Qt.alpha(appsTab.accent, 0.16)
+                                  : Qt.alpha(Kirigami.Theme.textColor, 0.05))
                         border.width: 1
-                        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                        border.color: appsTab.pendingPower === pwrBtn.action
+                                      ? Qt.alpha(appsTab.accent, 0.45)
+                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
                         scale: pwrPress.pressed ? 0.92 : 1.0
                         Behavior on color {
                             ColorAnimation { duration: 130 }
@@ -1288,19 +1459,23 @@ Item {
                     PowerButton {
                         icon: "system-log-out"
                         tip: "Log Out"
-                        onActivated: DashState.logOut()
+                        action: "logout"
+                        onActivated: appsTab.askPower("logout")
                     }
                     PowerButton {
                         icon: "system-reboot"
                         tip: "Reboot"
-                        onActivated: DashState.reboot()
+                        action: "reboot"
+                        onActivated: appsTab.askPower("reboot")
                     }
                     PowerButton {
                         icon: "system-shutdown"
                         tip: "Power Off"
-                        onActivated: DashState.powerOff()
+                        action: "poweroff"
+                        onActivated: appsTab.askPower("poweroff")
                     }
                 }
+
             }
 
             // ---------- detailed system info ----------
@@ -1670,6 +1845,19 @@ Item {
         Component.onCompleted: appsTab.registerTile(tile)
         Component.onDestruction: appsTab.unregisterTile(tile)
 
+        // input handlers are declared before everything that binds to them,
+        // so first-time binding evaluation never sees an undefined id
+        HoverHandler {
+            id: tileHover
+            cursorShape: Qt.PointingHandCursor
+        }
+
+        TapHandler {
+            id: tileTap
+            enabled: !tile.reorderable
+            onTapped: DashState.launch(tile.modelData.path, tile.modelData.id)
+        }
+
         // keyboard-selector halo
         Rectangle {
             anchors.fill: parent
@@ -1772,7 +1960,6 @@ Item {
                     var p = dragArea.mapToItem(scroller.contentItem,
                                                 dragArea.mouseX, dragArea.mouseY)
                     appsTab.beginPinDrag(tile, p.x, p.y)
-                    console.log("[csm-drag] lift", tile.modelData.name)
                 }
             }
 
@@ -1803,7 +1990,6 @@ Item {
                 holdTimer.stop()
                 var held = Date.now() - dragArea.pressTime
                 if (dragArea.dragMode) {
-                    console.log("[csm-drag] drop", appsTab.pinFromIndex, "→", appsTab.pinDropIndex)
                     appsTab.endPinDrag(true)
                 } else if (!dragArea.moved && held < 500) {
                     // quick press → launch; a near-miss on the hold stays put
@@ -1854,17 +2040,6 @@ Item {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: DashState.togglePin(tile.modelData.id)
             }
-        }
-
-        HoverHandler {
-            id: tileHover
-            cursorShape: Qt.PointingHandCursor
-        }
-
-        TapHandler {
-            id: tileTap
-            enabled: !tile.reorderable
-            onTapped: DashState.launch(tile.modelData.path, tile.modelData.id)
         }
     }
 }

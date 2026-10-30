@@ -12,7 +12,8 @@
         "Id": "com.nizar.dashboard",
         "License": "GPL-3.0",
         "Name": "Custom Start Menu",
-        "Version": "1.1"
+        "Version": "1.2",
+        "Website": "https://github.com/nizar2004/MyCustomStartMenu"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
 }

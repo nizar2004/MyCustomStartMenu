@@ -40,6 +40,77 @@ EXE=$(grep -m1 '^Exec=' "$DF" | cut -d= -f2-)
 EXE=$(printf '%s' "$EXE" | sed 's/ %[fFuUdDnNickvm]//g; s/%%/%/g')
 [ -n "$EXE" ] || exit 1
 
+# ------------------------------------------------------- Exec tokenizer ---
+# The Desktop Entry spec allows quoting in Exec (AppImage integrators write
+# Exec="/opt/My App.AppImage" %F). KDE's native launcher parses those quotes
+# via KShell::splitArgs; a raw `exec $EXE` does not — the quotes stay part
+# of the filename and the exec fails with "No such file or directory"
+# (invisibly, since stdio goes to /dev/null).
+#
+# Tokenizes Exec into the positional parameters (double quotes, single
+# quotes and backslash escapes are honored), then the exec sites use
+# `exec "$@"`. This MUST be inline, not a function: a function's `set --`
+# only touches its own scope, and the args would be lost on return.
+# Tabs are normalized to spaces first — they are whitespace separators
+# either way, and it keeps the case patterns simple.
+REST=$(printf '%s' "$EXE" | tr '\t' ' ')
+set --
+while [ -n "$REST" ]; do
+    # skip whitespace between arguments
+    while [ -n "$REST" ]; do
+        case ${REST%"${REST#?}"} in
+            ' ') REST=${REST#?} ;;
+            *) break ;;
+        esac
+    done
+    [ -n "$REST" ] || break
+    ARG=""
+    while [ -n "$REST" ]; do
+        C=${REST%"${REST#?}"}
+        REST=${REST#?}
+        case "$C" in
+            ' ')
+                break    # unquoted whitespace ends this argument
+                ;;
+            '"')
+                # double-quoted segment; backslash escapes the next char
+                while [ -n "$REST" ]; do
+                    C=${REST%"${REST#?}"}
+                    REST=${REST#?}
+                    [ "$C" = '"' ] && break
+                    if [ "$C" = '\' ] && [ -n "$REST" ]; then
+                        C=${REST%"${REST#?}"}
+                        REST=${REST#?}
+                    fi
+                    ARG="$ARG$C"
+                done
+                ;;
+            "'")
+                # single-quoted segment; no escapes inside
+                while [ -n "$REST" ]; do
+                    C=${REST%"${REST#?}"}
+                    REST=${REST#?}
+                    [ "$C" = "'" ] && break
+                    ARG="$ARG$C"
+                done
+                ;;
+            '\')
+                # escaped character outside quotes, taken literally
+                if [ -n "$REST" ]; then
+                    C=${REST%"${REST#?}"}
+                    REST=${REST#?}
+                fi
+                ARG="$ARG$C"
+                ;;
+            *)
+                ARG="$ARG$C"
+                ;;
+        esac
+    done
+    set -- "$@" "$ARG"
+done
+[ "$#" -gt 0 ] || exit 1
+
 # -------------------------------------------------------------- terminal --
 # Terminal=true apps run inside the user's terminal emulator, resolved from
 # the same kdeglobals keys the native launcher uses.
@@ -82,9 +153,9 @@ fi
 # -------------------------------------------------- inner: run the app ----
 if [ "${CSM_DIRECT:-}" = "1" ]; then
     if [ -n "$TERM_EXE" ]; then
-        exec $TERM_EXE $TARGS $EXE </dev/null >/dev/null 2>&1
+        exec $TERM_EXE $TARGS "$@" </dev/null >/dev/null 2>&1
     fi
-    exec $EXE </dev/null >/dev/null 2>&1
+    exec "$@" </dev/null >/dev/null 2>&1
 fi
 
 # ------------------------------------------------ layer 1: systemd unit ---

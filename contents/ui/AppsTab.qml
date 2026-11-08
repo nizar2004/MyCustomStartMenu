@@ -495,7 +495,24 @@ Item {
     }
 
     onFilterChanged: { clearSel(); refresh() }
-    onSearchChanged: { clearSel(); refresh() }
+    // Kickoff behavior: while a search is active the first result is
+    // selected as soon as results update — the keyboard-selector halo sits
+    // on it and Enter launches it. Clearing the search returns to the
+    // plain, unselected grid. The selection is applied via Qt.callLater so
+    // it lands AFTER the coalesced doRefresh() has rebuilt `sections` from
+    // the new query (callLater runs callbacks in registration order, and
+    // refresh() registers doRefresh first, so ordering is guaranteed).
+    onSearchChanged: {
+        refresh();
+        if (search.trim() === "") { clearSel(); return; }
+        Qt.callLater(function() {
+            if (sections.length > 0 && sections[0].apps && sections[0].apps.length > 0) {
+                setSel(0, 0);
+            } else {
+                clearSel();   // no hits → nothing to highlight
+            }
+        });
+    }
 
     Component.onCompleted: {
         filter = Plasmoid.configuration.defaultCategory !== ""

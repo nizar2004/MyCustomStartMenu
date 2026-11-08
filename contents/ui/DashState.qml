@@ -196,10 +196,40 @@ QtObject {
     readonly property url scanUrl: Qt.resolvedUrl("../code/scanapps.sh")
     readonly property url infoUrl: Qt.resolvedUrl("../code/sysinfo.sh")
     readonly property url favsUrl: Qt.resolvedUrl("../code/readfavs.sh")
+    readonly property url osUrl: Qt.resolvedUrl("../code/osid.sh")
     readonly property string sysCmd: "sh " + shUrl(sysUrl)
     readonly property string scanCmd: "sh " + shUrl(scanUrl)
     readonly property string infoCmd: "sh " + shUrl(infoUrl)
     readonly property string favsCmd: "sh " + shUrl(favsUrl)
+    readonly property string osCmd: "sh " + shUrl(osUrl)
+
+    // -------- running distro (panel icon + tooltips) --------
+    // osid.sh reports "ID<TAB>Pretty Name" from /etc/os-release; the widget
+    // bundles the matching logo and shows it as the default shortcut icon
+    property string osId: ""       // arch | cachyos | ubuntu | linuxmint | manjaro | …
+    property string osPretty: ""   // e.g. "Arch Linux"
+
+    readonly property var osLogos: ({
+        "arch": "os-arch.svg",
+        "cachyos": "os-cachyos.svg",
+        "ubuntu": "os-ubuntu.svg",
+        "linuxmint": "os-mint.svg",
+        "manjaro": "os-manjaro.svg"
+    })
+
+    // bundled distro logo for the running OS, or "" when we have none
+    function osLogo() {
+        if (osId !== "" && osLogos[osId] !== undefined) {
+            return Qt.resolvedUrl("../icons/" + osLogos[osId]).toString();
+        }
+        return "";
+    }
+
+    function parseOs(text) {
+        var f = String(text).trim().split("\t");
+        if (f[0] !== "" && f[0] !== undefined) { osId = f[0]; }
+        if (f[1] !== undefined) { osPretty = f[1]; }
+    }
 
     property int _seq: 0
 
@@ -253,6 +283,11 @@ QtObject {
                 disconnectSource(sourceName);
                 return;
             }
+            if (base === state.osCmd) {
+                state.parseOs(out);
+                disconnectSource(sourceName);
+                return;
+            }
             disconnectSource(sourceName);        // fire & forget (launch, pin…)
         }
     }
@@ -262,6 +297,7 @@ QtObject {
         rescanApps();
         readFavorites();
         readSysInfo();
+        runOnce(osCmd);          // detect the distro once for the panel icon
     }
 
     function rescanApps() {

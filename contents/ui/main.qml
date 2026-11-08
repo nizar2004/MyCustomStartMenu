@@ -9,10 +9,20 @@ PlasmoidItem {
     switchWidth: Kirigami.Units.gridUnit * 5
     switchHeight: Kirigami.Units.gridUnit * 5
 
-    Plasmoid.icon: Plasmoid.configuration.panelIcon !== ""
-                   ? Plasmoid.configuration.panelIcon : "dashboard-show"
+    // shortcut icon: explicit user choice wins; otherwise the running
+    // distro's bundled logo (Arch/CachyOS/Ubuntu/Mint/Manjaro detected at
+    // runtime from /etc/os-release); otherwise the generic fallback
+    readonly property string shortcutIcon: {
+        if (Plasmoid.configuration.panelIcon !== "") {
+            return Plasmoid.configuration.panelIcon;
+        }
+        var logo = DashState.osLogo();
+        return logo !== "" ? logo : "dashboard-show";
+    }
 
-    toolTipMainText: "Custom Start Menu"
+    Plasmoid.icon: root.shortcutIcon
+
+    toolTipMainText: DashState.osPretty !== "" ? DashState.osPretty : "Custom Start Menu"
     toolTipSubText: {
         var s = DashState.sys;
         var parts = ["CPU " + Math.round(s.cpu * 100) + "%",
@@ -66,8 +76,7 @@ PlasmoidItem {
 
         Kirigami.Icon {
             anchors.fill: parent
-            source: Plasmoid.configuration.panelIcon !== ""
-                    ? Plasmoid.configuration.panelIcon : "dashboard-show"
+            source: root.shortcutIcon
             active: compHover.hovered
         }
 

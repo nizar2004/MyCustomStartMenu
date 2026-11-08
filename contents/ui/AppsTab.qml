@@ -1131,7 +1131,8 @@ Item {
                             Layout.fillWidth: true
                             spacing: 7
                             Kirigami.Icon {
-                                source: "computer-symbolic"
+                                source: DashState.osLogo() !== ""
+                                        ? DashState.osLogo() : "computer-symbolic"
                                 implicitWidth: 14
                                 implicitHeight: 14
                             }

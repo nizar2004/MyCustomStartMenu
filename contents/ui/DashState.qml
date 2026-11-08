@@ -41,17 +41,165 @@ QtObject {
     property var sysInfo: ({})
 
     // ------------------------------------------------------------------
+    // Phone (KDE Connect)
+    // ------------------------------------------------------------------
+    property var phoneDevices: []            // [{id, name, reachable}]
+    property string phoneId: ""              // selected device id
+    property int phoneBattery: -1
+    property bool phoneCharging: false
+    property var phoneMedia: null            // {status, title, artist, art, identity}
+    property int phoneSignal: -1             // cellular strength 0-4, -1 unknown
+    property string phoneNetType: ""         // "LTE", "5G", …
+    property var phoneNotifs: []             // [{id, app, title, dismissable}]
+    property string _phoneSrc: ""            // connected poll source name
+    property string _phoneNotifSrc: ""       // one-shot notifications source
+    property int _phoneEpoch: 0              // invalidates deferred poll changes
+
+    readonly property url phoneUrl: Qt.resolvedUrl("../code/phone.sh")
+
+    // start/refresh the periodic phone poll (devices + battery + media)
+    // NOTE: the connect/disconnect is deferred via Qt.callLater — this is
+    // sometimes invoked from inside the engine's onNewData callback, and
+    // touching source lifetimes there crashes plasmashell (SIGSEGV in
+    // DataContainer::checkForUpdate).
+    function refreshPhone() {
+        var e = ++_phoneEpoch;
+        Qt.callLater(function() {
+            if (e !== _phoneEpoch) { return; }   // superseded or closed meanwhile
+            closePhonePoll();
+            var src = "sh " + shUrl(phoneUrl) + " poll " + sh(phoneId);
+            _phoneSrc = src;
+            run.connectSource(src);
+        });
+    }
+
+    // stop the poll (popup closed / left the phone panel)
+    function closePhonePoll() {
+        _phoneEpoch++;                           // cancel any deferred refresh
+        if (_phoneSrc !== "") {
+            run.disconnectSource(_phoneSrc);
+            _phoneSrc = "";
+        }
+    }
+
+    // fire-and-forget phone actions ("ring", "cursor <dx> <dy>", "share <arg>"…)
+    function phoneAction(action, arg, arg2) {
+        if (action === "refresh") {
+            runOnce("sh " + shUrl(phoneUrl) + " refresh");
+            return;
+        }
+        if (phoneId === "") { return; }
+        var cmd = "sh " + shUrl(phoneUrl) + " " + action + " " + sh(phoneId);
+        if (arg !== undefined && arg !== null && String(arg) !== "") {
+            cmd += " " + sh(String(arg));
+        }
+        if (arg2 !== undefined && arg2 !== null && String(arg2) !== "") {
+            cmd += " " + sh(String(arg2));
+        }
+        runOnce(cmd);
+    }
+
+    function parsePhone(text) {
+        var parts = String(text).split("---");
+
+        // --- devices ---
+        var devs = [];
+        var dl = (parts[0] || "").split("\n");
+        for (var i = 0; i < dl.length; i++) {
+            var f = dl[i].split("\u001f");
+            if (f.length >= 3 && f[0] !== "") {
+                devs.push({ id: f[0], name: f[1], reachable: f[2] === "1" });
+            }
+        }
+        phoneDevices = devs;
+
+        // validate the selection; fall back to first reachable, then first
+        var sel = null;
+        for (var d = 0; d < devs.length; d++) {
+            if (devs[d].id === phoneId) { sel = devs[d]; break; }
+        }
+        if (!sel && devs.length > 0) {
+            for (var r = 0; r < devs.length; r++) {
+                if (devs[r].reachable) { sel = devs[r]; break; }
+            }
+            if (!sel) { sel = devs[0]; }
+        }
+        if (sel && sel.id !== phoneId) {
+            phoneId = sel.id;
+            refreshPhone();   // re-point battery/media polling at this device
+            return;
+        }
+
+        // --- battery ---
+        var bl = (parts[1] || "").trim().split("\u001f");
+        var b = parseInt(bl[0]);
+        phoneBattery = isNaN(b) ? -1 : b;
+        phoneCharging = (bl[1] === "true");
+
+        // --- connectivity ---
+        var cl = (parts[2] || "").trim().split("\u001f");
+        var s = parseInt(cl[0]);
+        phoneSignal = isNaN(s) ? -1 : s;
+        phoneNetType = cl[1] || "";
+
+        // --- media ---
+        var ml = (parts[3] || "").trim().split("\u001f");
+        if (ml[0] === "" || ml[0] === "none") {
+            phoneMedia = null;
+        } else {
+            phoneMedia = {
+                status: ml[0], title: ml[1], artist: ml[2],
+                art: ml[3], identity: ml[4]
+            };
+        }
+    }
+
+    // fetch the phone's notifications (one-shot, refreshed on demand)
+    function fetchPhoneNotifs() {
+        closePhoneNotifs();
+        if (phoneId === "") { return; }
+        _phoneNotifSrc = "sh " + shUrl(phoneUrl) + " notif " + sh(phoneId);
+        run.connectSource(_phoneNotifSrc);
+    }
+
+    function closePhoneNotifs() {
+        if (_phoneNotifSrc !== "") {
+            run.disconnectSource(_phoneNotifSrc);
+            _phoneNotifSrc = "";
+        }
+    }
+
+    function parsePhoneNotifs(text) {
+        var lines = String(text).split("\n");
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+            var f = lines[i].split("\u001f");
+            if (f.length >= 4 && f[0] !== "") {
+                out.push({
+                    id: f[0], app: f[1],
+                    title: f[2],
+                    dismissable: f[3] === "1"
+                });
+            }
+        }
+        phoneNotifs = out;
+        if (_phoneNotifSrc !== "") {
+            run.disconnectSource(_phoneNotifSrc);   // one-shot: same safe
+            _phoneNotifSrc = "";                    // pattern as the app scan
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Data plumbing (executable data engine)
     // ------------------------------------------------------------------
     readonly property url sysUrl: Qt.resolvedUrl("../code/sysmon.sh")
     readonly property url scanUrl: Qt.resolvedUrl("../code/scanapps.sh")
     readonly property url infoUrl: Qt.resolvedUrl("../code/sysinfo.sh")
+    readonly property url favsUrl: Qt.resolvedUrl("../code/readfavs.sh")
     readonly property string sysCmd: "sh " + shUrl(sysUrl)
     readonly property string scanCmd: "sh " + shUrl(scanUrl)
     readonly property string infoCmd: "sh " + shUrl(infoUrl)
-    readonly property string favsCmd:
-        "kreadconfig6 --file klauncherrc --group Favorites --key FavoritesURLs 2>/dev/null; echo '---';"
-        + " grep -h '^launchers=' ~/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null | head -5"
+    readonly property string favsCmd: "sh " + shUrl(favsUrl)
 
     property int _seq: 0
 
@@ -78,6 +226,14 @@ QtObject {
         onNewData: (sourceName, data) => {
             var out = data && data["stdout"] !== undefined ? String(data["stdout"]) : "";
             var base = String(sourceName).split(" #")[0];
+            if (state._phoneSrc !== "" && base === state._phoneSrc) {
+                state.parsePhone(out);           // keep connected: phone poll
+                return;
+            }
+            if (state._phoneNotifSrc !== "" && base === state._phoneNotifSrc) {
+                state.parsePhoneNotifs(out);     // one-shot: parsed, then closed
+                return;
+            }
             if (base === state.sysCmd) {
                 state.parseSys(out);             // keep connected: periodic poll
                 return;
@@ -255,7 +411,8 @@ QtObject {
             out.push({
                 id: f[0], name: f[1],
                 icon: icon,
-                cats: f[3], exec: f[4], path: f[5]
+                cats: f[3], exec: f[4], path: f[5],
+                generic: f[6] || "", keywords: f[7] || ""
             });
         }
         if (out.length > 0) {
@@ -305,7 +462,8 @@ QtObject {
                 id: a.id, name: a.name, icon: a.icon,
                 cat: cat.name, catIcon: cat.icon,
                 pinned: pinnedIds.indexOf(a.id) >= 0,
-                path: a.path
+                path: a.path,
+                generic: a.generic, keywords: a.keywords
             });
         }
         appsModel.clear();
@@ -359,18 +517,19 @@ QtObject {
     // Actions
     // ------------------------------------------------------------------
     function launch(path, id) {
-        // Launch through the user systemd manager so the app is spawned by
-        // systemd instead of living in plasmashell's process tree: apps
-        // launched from inside plasmashell get torn down (and often crash)
-        // whenever plasmashell restarts. gio handles desktop-file parsing
-        // inside the transient unit; fall back to a plain gio/gtk-launch if
-        // systemd-run is unavailable.
-        var unit = "app-csm-" + Date.now();
-        var script = shUrl(Qt.resolvedUrl("../code/launchapp.sh"));
-        runOnce("systemd-run --user --collect --unit=" + unit + " -p Description='Custom Start Menu' "
-              + sh(script) + " " + sh(path) + " " + sh(id)
-              + " || gio launch " + sh(path) + " 2>/dev/null"
-              + " || gtk-launch " + sh(id) + " 2>/dev/null");
+        // Launch the app exactly like the native KDE application launcher
+        // (Kickoff): KIO's ApplicationLauncherJob → KProcessRunner registers
+        // the process with the user systemd manager (app-<name>@<uuid>
+        // .service, Slice=app.slice) or forks it fully detached; stdio always
+        // lands on the journal or /dev/null — never on a plasmashell pipe or
+        // a GLib journald stream that can be closed underneath the app (that
+        // is what made Electron apps such as Discord crash with
+        // "write EPIPE"). The whole mechanism lives in launchapp.sh because
+        // the executable engine runs command strings without a shell (no
+        // pipes, no || fallbacks): one plain "sh <script> <args>" call, the
+        // same shape as this widget's other engine commands.
+        runOnce("sh " + shUrl(Qt.resolvedUrl("../code/launchapp.sh"))
+              + " " + sh(String(path)) + " " + sh(String(id)));
         requestClose();
     }
 

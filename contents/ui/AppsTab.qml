@@ -33,6 +33,49 @@ Item {
     property string filter: "all"        // "all" (first) | "pinned" | category name
     property string search: ""
     property bool detailedInfo: false
+    property bool phoneMode: false       // right panel switched to phone control
+    property bool notifOpen: false       // phone notifications list expanded
+    property bool touchpadOn: false      // virtual touchpad (mouse control) open
+
+    // tiny toast for action feedback inside the phone panel
+    property string _phoneToast: ""
+    property string _phoneToastIcon: ""
+    function showPhoneToast(msg, icon) {
+        _phoneToastIcon = icon || "";
+        _phoneToast = msg;
+        phoneToastTimer.restart();
+    }
+    Timer {
+        id: phoneToastTimer
+        interval: 2200
+        onTriggered: appsTab._phoneToast = ""
+    }
+
+    // the currently selected phone device (or null)
+    readonly property var phoneDev: {
+        var devs = DashState.phoneDevices;
+        for (var i = 0; i < devs.length; i++) {
+            if (devs[i].id === DashState.phoneId) { return devs[i]; }
+        }
+        return null;
+    }
+
+    function sendPhoneLink() {
+        var t = linkInput.text.trim();
+        if (t === "") { return; }
+        if (!/^https?:\/\//i.test(t)) { t = "https://" + t; }
+        DashState.phoneAction("share", t);
+        linkInput.text = "";
+        showPhoneToast("Link sent to phone", "insert-link");
+    }
+
+    function typeOnPhone() {
+        var t = typeInput.text;
+        if (t === "") { return; }
+        DashState.phoneAction("type", t);
+        typeInput.text = "";
+        showPhoneToast("Typed on your phone", "input-keyboard");
+    }
 
     // power action waiting for a yes/no confirmation
     // "" | "logout" | "reboot" | "poweroff"
@@ -172,17 +215,19 @@ Item {
         }
     }
 
-    // ---------------- pinned-tab drag reorder ----------------
-    // hold a pinned tile for 0.6 s to lift it (see AppTile), then move the
-    // pointer: a floating ghost follows the dragged app and an insertion bar
-    // shows the target slot; the new order is applied (and persisted) when
-    // the pointer is released
+    // ---------------- pinned-tab drag reorder (Kickoff-style) ----------------
+    // press a pinned tile and move: the tile lifts immediately (no hold
+    // delay), a floating copy follows the pointer and the other tiles slide
+    // aside in real time to open the slot under the cursor — exactly like
+    // KDE's application launcher grid. Releasing inside the grid commits
+    // the new order; while the pointer is outside the grid every tile
+    // springs back to its original slot (Kickoff's DropArea "undo on exit").
     property bool pinDragActive: false
     property string pinDragId: ""
     property string pinDragName: ""
     property string pinDragIcon: ""
-    property int pinDropIndex: -1
-    property int pinFromIndex: -1
+    property int pinFromIndex: -1    // slot the drag started in
+    property int pinHoverIndex: -1   // slot currently opened for the tile (-1 = outside)
     property real pinBaseY: 0
 
     function pinCount() {
@@ -203,20 +248,69 @@ Item {
         return Math.max(40, Math.floor((sectionsCol.width - 2 * (c - 1)) / c));
     }
 
-    // the ghost/bar are plain children of the scroller (no layout owns them),
-    // so every position is computed in content coordinates and then mapped
-    // into the target item's parent space — this stays correct no matter
-    // whether the Flickable parents them to its contentItem or to itself
-    function toParentOf(item, cx, cy) {
-        return scroller.contentItem.mapToItem(item.parent, cx, cy);
+    // top-left corner of slot `idx` using the same pitch as the Flow
+    // (tile width + 2 spacing, 102 per row)
+    function pinSlotPos(idx) {
+        var cols = gridColsNow();
+        var tw = gridTileWNow();
+        return Qt.point((idx % cols) * (tw + 2),
+                        Math.floor(idx / cols) * 102);
     }
 
-    function beginPinDrag(tile, cx, cy) {
+    // displacement for tile `myIndex` while a drag is live — this is what
+    // makes the grid shuffle like Kickoff: the dragged tile travels to the
+    // hovered slot and everything in between slides one slot toward the
+    // source, leaving an open gap at the hover position. Fed to a Translate
+    // transform on each tile, so the slides are animated.
+    function pinDisplacement(myIndex) {
+        if (!pinDragActive || pinFromIndex < 0 || pinHoverIndex < 0) {
+            return Qt.point(0, 0);
+        }
+        var n = pinCount();
+        if (myIndex < 0 || myIndex >= n) { return Qt.point(0, 0); }
+        var target = -1;
+        if (myIndex === pinFromIndex) {
+            target = pinHoverIndex;
+        } else {
+            var s = pinFromIndex, h = pinHoverIndex;
+            if (s < h && myIndex > s && myIndex <= h) { target = myIndex - 1; }
+            else if (h < s && myIndex >= h && myIndex < s) { target = myIndex + 1; }
+        }
+        if (target < 0 || target === myIndex) { return Qt.point(0, 0); }
+        var a = pinSlotPos(myIndex);
+        var b = pinSlotPos(target);
+        return Qt.point(b.x - a.x, b.y - a.y);
+    }
+
+    // ---------------- app drag & drop (Kickoff-style) ----------------
+    // Every app tile is a real system drag (DragHandler + Drag.Automatic
+    // carrying the desktop file URL): press an app and move — inside the
+    // widget the Pinned grid shuffles live like the KDE launcher, and if the
+    // pointer leaves the grid the tiles spring back while the drag keeps
+    // going, so it can be dropped on the taskbar (adds a launcher), the
+    // desktop or any other window — exactly how Kickoff does it.
+    property string currentDragId: ""     // app id being dragged (native drag)
+    property Item currentDragTile: null   // the tile that started it
+
+    function noteTileDrag(tile) {
+        currentDragTile = tile;
+        currentDragId = tile.modelData.id;
+        // on the Pinned tab the shuffle arms immediately; the slot-following
+        // starts with the first drag-move event over the content area
+        beginPinDrag(tile);
+    }
+
+    function endTileDrag() {
+        currentDragId = "";
+        currentDragTile = null;
+        if (pinDragActive) { endPinDrag(false); }
+    }
+
+    function beginPinDrag(tile) {
         if (filter !== "pinned" || search !== "" || pinDragActive) { return; }
+        if (!tile) { return; }
         var i = pinIndex(tile.modelData.id);
         if (i < 0) { return; }
-        pinGhost.width = gridTileWNow();
-        pinGhost.height = 100;
         var p = tile.mapToItem(scroller.contentItem, 0, 0);
         // y of the grid's first row (the section header sits above it)
         pinBaseY = p.y - Math.floor(i / gridColsNow()) * 102;
@@ -224,62 +318,71 @@ Item {
         pinDragName = tile.modelData.name;
         pinDragIcon = tile.modelData.icon;
         pinFromIndex = i;
-        pinDropIndex = -1;
+        pinHoverIndex = -1;
         pinDragActive = true;
-        updatePinDrag(cx, cy);
     }
 
-    // cx/cy are the pointer position in scroller content coordinates
+    // a native drag event over the content area — one entry point for
+    // entering and moving, same idea as Kickoff's KickoffDropArea
+    function nativeDragMove(drag) {
+        if (currentDragId === "") { return; }
+        if (!pinDragActive) { beginPinDrag(currentDragTile); }
+        if (!pinDragActive) { return; }
+        var c = pinDropArea.mapToItem(scroller.contentItem, drag.x, drag.y);
+        updatePinDrag(c.x, c.y);
+    }
+
+    // cx/cy are the pointer position in scroller content coordinates —
+    // inside the grid → open the hovered slot; outside → every tile springs
+    // back (pinHoverIndex = -1), matching Kickoff's undo-on-exit
     function updatePinDrag(cx, cy) {
         if (!pinDragActive || pinFromIndex < 0) { return; }
         var n = pinCount();
         if (n < 1) { return; }
-        var g = toParentOf(pinGhost, cx, cy);
-        pinGhost.x = g.x - pinGhost.width / 2;
-        pinGhost.y = g.y - pinGhost.height / 2;
         var cols = gridColsNow();
         var tw = gridTileWNow(), th = 100;
-        var col = Math.floor(cx / (tw + 2));
-        var row = Math.floor((cy - pinBaseY) / (th + 2));
-        if (col < 0) { col = 0; }
-        if (col > cols - 1) { col = cols - 1; }
-        if (row < 0) { row = 0; }
-        var maxRow = Math.max(0, Math.floor((n - 1) / cols));
-        if (row > maxRow) { row = maxRow; }
-        var idx = row * cols + col;
-        if (idx > n - 1) { idx = n - 1; }
-        pinDropIndex = idx;
-        // insertion bar sits at the left edge of the target slot
-        var b = toParentOf(pinBar, (idx % cols) * (tw + 2) - 1,
-                           pinBaseY + Math.floor(idx / cols) * (th + 2) + 4);
-        pinBar.x = b.x;
-        pinBar.y = b.y;
-        pinBar.visible = idx !== pinFromIndex;
+        var idx = -1;
+        var maxX = cols * (tw + 2) - 2;
+        var maxY = pinBaseY + Math.ceil(n / cols) * (th + 2);
+        if (cx >= -2 && cx <= maxX && cy >= pinBaseY - 6 && cy <= maxY + 6) {
+            var col = Math.floor(cx / (tw + 2));
+            var row = Math.floor((cy - pinBaseY) / (th + 2));
+            if (col < 0) { col = 0; }
+            if (col > cols - 1) { col = cols - 1; }
+            if (row < 0) { row = 0; }
+            var maxRow = Math.max(0, Math.floor((n - 1) / cols));
+            if (row > maxRow) { row = maxRow; }
+            idx = row * cols + col;
+            if (idx > n - 1) { idx = n - 1; }
+        }
+        pinHoverIndex = idx;
     }
 
-    // commit === false aborts the gesture (e.g. the pointer was stolen) and
-    // leaves the pinned order untouched
+    // commit === false aborts the gesture (pointer left the grid, was
+    // stolen, …) and leaves the pinned order untouched
     function endPinDrag(commit) {
         if (commit === undefined) { commit = true; }
-        if (commit && pinDragActive && pinDropIndex >= 0 && pinFromIndex >= 0
-                && pinDropIndex !== pinFromIndex) {
-            var apps = sections[0].apps;
-            var ids = [];
-            for (var i = 0; i < apps.length; i++) { ids.push(apps[i].id); }
-            var id = ids[pinFromIndex];
-            ids.splice(pinFromIndex, 1);
-            var to = pinDropIndex;
-            if (to > ids.length) { to = ids.length; }
-            ids.splice(to, 0, id);
-            DashState.reorderPinned(ids);
-        }
+        var from = pinFromIndex;
+        var to = pinHoverIndex;
+        var ok = commit && pinDragActive && to >= 0 && from >= 0 && to !== from;
+        // clear first: the commit below recreates the tiles, and they must
+        // come back with a zero displacement (they render at their new slots)
         pinDragActive = false;
         pinDragId = "";
         pinDragName = "";
         pinDragIcon = "";
         pinFromIndex = -1;
-        pinDropIndex = -1;
-        pinBar.visible = false;
+        pinHoverIndex = -1;
+        if (ok) {
+            var apps = sections[0].apps;
+            var ids = [];
+            for (var i = 0; i < apps.length; i++) { ids.push(apps[i].id); }
+            var id = ids[from];
+            ids.splice(from, 1);
+            if (to > ids.length) { to = ids.length; }
+            ids.splice(to, 0, id);
+            DashState.reorderPinned(ids);
+        }
     }
 
     // theme-driven accent, with optional user override from settings
@@ -335,11 +438,23 @@ Item {
 
         // ----- visible apps -----
         var q = search.toLowerCase();
+        var toks = q.split(/\s+/).filter(function(t) { return t !== ""; });
+        if (toks.length === 0) { q = ""; }   // whitespace-only = empty search
         var vis = [];
         for (var k = 0; k < m.count; k++) {
             var app = m.get(k);
-            if (q !== "") {
-                if (app.name.toLowerCase().indexOf(q) < 0) { continue; }
+            if (toks.length > 0) {
+                // match every word against name, generic name, keywords,
+                // command and category — e.g. "browser" finds Firefox via its
+                // GenericName, "ide" finds editors via Keywords
+                var hay = (app.name + " " + (app.generic || "") + " "
+                        + (app.keywords || "") + " " + app.exec + " "
+                        + app.cat).toLowerCase();
+                var hit = true;
+                for (var t = 0; t < toks.length; t++) {
+                    if (hay.indexOf(toks[t]) < 0) { hit = false; break; }
+                }
+                if (!hit) { continue; }
             } else {
                 if (filter === "pinned" && !app.pinned) { continue; }
                 if (filter !== "all" && filter !== "pinned" && app.cat !== filter) { continue; }
@@ -398,6 +513,11 @@ Item {
             appsTab.filter = Plasmoid.configuration.defaultCategory !== ""
                              ? Plasmoid.configuration.defaultCategory : "all";
             appsTab.detailedInfo = false;
+            appsTab.phoneMode = false;
+            appsTab.notifOpen = false;
+            appsTab.touchpadOn = false;
+            DashState.closePhonePoll();
+            DashState.closePhoneNotifs();
             appsTab.clearSel();
             searchField.text = "";
             scroller.contentY = 0;
@@ -696,6 +816,12 @@ Item {
                 contentWidth: width
                 contentHeight: sectionsCol.height
                 boundsBehavior: Flickable.StopAtBounds
+                // Kickoff's views are not mouse-flickable either — only the
+                // wheel and the scrollbar scroll them. This keeps every drag
+                // on a tile a pure app-drag (to the taskbar or inside the
+                // Pinned grid) instead of a fight with the Flickable, and
+                // clicks stay reliable (wobble ≤ drag threshold = launch)
+                interactive: false
 
                 QQC2.ScrollBar.vertical: PC3.ScrollBar { }
 
@@ -810,53 +936,27 @@ Item {
                     }
                 }
 
-                // floating ghost that follows the pointer during a pinned
-                // reorder — it lives inside the Flickable so no ColumnLayout
-                // overwrites its x/y, and it scrolls with the grid
-                Rectangle {
-                    id: pinGhost
-                    visible: appsTab.pinDragActive
-                    width: 92
-                    height: 100
-                    radius: 14
-                    color: Qt.alpha(appsTab.accent, 0.18)
-                    border.width: 1.5
-                    border.color: appsTab.accent
-                    opacity: 0.95
-                    z: 60
-                    Column {
-                        width: parent.width - 10
-                        anchors.centerIn: parent
-                        spacing: 7
-                        Kirigami.Icon {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            source: appsTab.pinDragIcon
-                            implicitWidth: 46
-                            implicitHeight: 46
-                        }
-                        Text {
-                            width: parent.width
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignTop
-                            elide: Text.ElideRight
-                            wrapMode: Text.Wrap
-                            maximumLineCount: 2
-                            font.pixelSize: 11
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                            text: appsTab.pinDragName
-                        }
+                // receives the native drag events while an app tile is being
+                // dragged — the same mechanism as Kickoff's KickoffDropArea:
+                // moving over the grid drives the Pinned-tab live shuffle,
+                // leaving the area undoes every move (tiles spring back) and
+                // lets the pointer carry the drag out to the taskbar, desktop
+                // or any window that accepts the app's URL
+                DropArea {
+                    id: pinDropArea
+                    x: 0
+                    y: 0
+                    width: scroller.contentWidth
+                    height: scroller.contentHeight
+                    enabled: appsTab.currentDragId !== ""
+                    onEntered: drag => appsTab.nativeDragMove(drag)
+                    onPositionChanged: drag => appsTab.nativeDragMove(drag)
+                    onExited: {
+                        if (appsTab.currentDragId !== "") { appsTab.endPinDrag(false) }
                     }
-                }
-
-                // insertion bar showing where the dragged pin will land
-                Rectangle {
-                    id: pinBar
-                    visible: false
-                    width: 3
-                    height: 92
-                    radius: 1.5
-                    color: appsTab.accent
-                    z: 55
+                    onDropped: drag => {
+                        if (appsTab.currentDragId !== "") { appsTab.endPinDrag(true) }
+                    }
                 }
             }
         }
@@ -888,8 +988,8 @@ Item {
             // ---------- main sidebar ----------
             ColumnLayout {
                 anchors.fill: parent
-                visible: !appsTab.detailedInfo
-                opacity: appsTab.detailedInfo ? 0 : 1
+                visible: !appsTab.detailedInfo && !appsTab.phoneMode
+                opacity: (appsTab.detailedInfo || appsTab.phoneMode) ? 0 : 1
                 Behavior on opacity {
                     NumberAnimation { duration: 160 }
                 }
@@ -1001,7 +1101,7 @@ Item {
                     id: sysCard
                     visible: Plasmoid.configuration.showSystemCard
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 104
+                    Layout.preferredHeight: 126
                     opacity: appsTab.entered ? 1 : 0
                     transform: Translate {
                         y: appsTab.entered ? 0 : 12
@@ -1041,6 +1141,15 @@ Item {
                                 font.weight: Font.DemiBold
                                 font.letterSpacing: 0.4
                                 color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
+                            }
+                            Text {
+                                visible: (DashState.sys.cpuTemp > 0 || DashState.sys.temp > 0)
+                                text: Math.round(DashState.sys.cpuTemp > 0 ? DashState.sys.cpuTemp : DashState.sys.temp) + "°C"
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                color: (DashState.sys.cpuTemp > 75 || DashState.sys.temp > 75)
+                                       ? Kirigami.Theme.negativeTextColor
+                                       : Qt.alpha(Kirigami.Theme.textColor, 0.55)
                             }
                             Item { Layout.fillWidth: true }
                             Kirigami.Icon {
@@ -1083,6 +1192,12 @@ Item {
                             Layout.fillWidth: true
                             lbl: "Disk"
                             val: Math.round(DashState.sys.disk * 100) + "%"
+                        }
+                        MiniRow {
+                            Layout.fillWidth: true
+                            lbl: "Network"
+                            val: "↓ " + Utils.fmtSpeed(DashState.sys.down)
+                                 + "  ↑ " + Utils.fmtSpeed(DashState.sys.up)
                         }
                     }
 
@@ -1809,6 +1924,1041 @@ Item {
                     }
                 }
             }
+
+            // ---------- phone panel (KDE Connect) ----------
+            ColumnLayout {
+                anchors.fill: parent
+                visible: appsTab.phoneMode
+                opacity: appsTab.phoneMode ? 1 : 0
+                Behavior on opacity {
+                    NumberAnimation { duration: 160 }
+                }
+                spacing: Kirigami.Units.gridUnit * 0.4
+
+                // re-run the device search a moment after --refresh
+                Timer {
+                    id: phoneRefreshTimer
+                    interval: 2500
+                    onTriggered: DashState.refreshPhone()
+                }
+
+                // header
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    PC3.ToolButton {
+                        icon.name: "go-previous"
+                        display: QQC2.AbstractButton.IconOnly
+                        onClicked: {
+                            appsTab.phoneMode = false;
+                            appsTab.notifOpen = false;
+                            appsTab.touchpadOn = false;
+                            DashState.closePhonePoll();
+                            DashState.closePhoneNotifs();
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+                        Text {
+                            text: "My Phone"
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                            color: Kirigami.Theme.textColor
+                        }
+                        Text {
+                            text: {
+                                var d = appsTab.phoneDev;
+                                if (!d) { return "KDE Connect"; }
+                                return d.name + (d.reachable ? " · Connected" : " · Offline");
+                            }
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                            color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
+                        }
+                    }
+                    // battery chip
+                    Rectangle {
+                        visible: appsTab.phoneDev !== null && DashState.phoneBattery >= 0
+                        Layout.alignment: Qt.AlignVCenter
+                        implicitWidth: phoneBatChip.implicitWidth + 14
+                        implicitHeight: 22
+                        radius: 11
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.06)
+                        border.width: 1
+                        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+
+                        RowLayout {
+                            id: phoneBatChip
+                            anchors.centerIn: parent
+                            spacing: 4
+
+                            Kirigami.Icon {
+                                source: {
+                                    if (DashState.phoneCharging) { return "battery-good-charging"; }
+                                    var b = DashState.phoneBattery;
+                                    return b > 80 ? "battery-full"
+                                         : b > 50 ? "battery-good"
+                                         : b > 20 ? "battery-low"
+                                         : "battery-caution";
+                                }
+                                implicitWidth: 12
+                                implicitHeight: 12
+                            }
+                            Text {
+                                text: DashState.phoneBattery + "%"
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                            }
+                        }
+                    }
+                    Kirigami.Icon {
+                        source: "kdeconnect"
+                        implicitWidth: 16
+                        implicitHeight: 16
+                        opacity: 0.55
+                    }
+                }
+
+                Flickable {
+                    id: phoneScroll
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.rightMargin: -20
+                    clip: true
+                    contentWidth: width
+                    contentHeight: phoneBody.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    QQC2.ScrollBar.vertical: PC3.ScrollBar { }
+
+                    ColumnLayout {
+                        id: phoneBody
+                        width: phoneScroll.width - 26
+                        spacing: Kirigami.Units.gridUnit * 0.4
+
+                component PhoneLabel: Text {
+                    property string text2
+                    text: text2
+                    font.pixelSize: 9
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 1.2
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
+                }
+
+                component PhoneSection: Item {
+                    id: psec
+                    // .data (not .children) so non-visual children (Timer,
+                    // Repeater) are accepted too
+                    default property alias content: psecCol.data
+                    property bool open: false
+                    visible: height > 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: open ? psecCol.implicitHeight : 0
+                    Behavior on Layout.preferredHeight {
+                        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                    }
+                    opacity: open ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation { duration: 160 }
+                    }
+                    clip: true
+
+                    ColumnLayout {
+                        id: psecCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        spacing: 8
+                    }
+                }
+
+                component PhoneAction: Rectangle {
+                    id: pa
+                    property string lbl
+                    property string icn
+                    property bool sel: false
+                    signal triggered()
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 56
+                    radius: 12
+                    color: paHv.hovered
+                           ? Qt.alpha(Kirigami.Theme.textColor, 0.07)
+                           : pa.sel
+                           ? Qt.alpha(appsTab.accent, 0.15)
+                           : Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                    border.width: 1
+                    border.color: pa.sel ? Qt.alpha(appsTab.accent, 0.5)
+                                         : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                    opacity: enabled ? 1 : 0.4
+                    Behavior on color {
+                        ColorAnimation { duration: 130 }
+                    }
+                    Behavior on opacity {
+                        NumberAnimation { duration: 130 }
+                    }
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 5
+
+                        Kirigami.Icon {
+                            source: pa.icn
+                            isMask: true
+                            implicitWidth: 17
+                            implicitHeight: 17
+                            color: pa.enabled
+                                   ? Qt.alpha(Kirigami.Theme.textColor, 0.8)
+                                   : Qt.alpha(Kirigami.Theme.textColor, 0.35)
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Text {
+                            text: pa.lbl
+                            font.pixelSize: 9
+                            color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+
+                    HoverHandler {
+                        id: paHv
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: pa.enabled
+                    }
+                    TapHandler {
+                        enabled: pa.enabled
+                        onTapped: pa.triggered()
+                    }
+                }
+
+                // device + battery card
+                Rectangle {
+                    visible: appsTab.phoneDev !== null
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 86
+                    radius: 14
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                    border.width: 1
+                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 10
+
+                        Item {
+                            Layout.preferredWidth: 42
+                            Layout.preferredHeight: 42
+                            Layout.alignment: Qt.AlignVCenter
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 11
+                                color: Qt.alpha(appsTab.accent, 0.15)
+                                border.width: 1
+                                border.color: Qt.alpha(appsTab.accent, 0.4)
+                            }
+                            Kirigami.Icon {
+                                anchors.centerIn: parent
+                                source: "smartphone"
+                                isMask: true
+                                color: appsTab.accent
+                                implicitWidth: 20
+                                implicitHeight: 20
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignVCenter
+                            spacing: 5
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: appsTab.phoneDev ? appsTab.phoneDev.name : "—"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                                color: Kirigami.Theme.textColor
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Kirigami.Icon {
+                                    source: {
+                                        if (DashState.phoneBattery < 0) { return "battery-missing"; }
+                                        if (DashState.phoneCharging) { return "battery-good-charging"; }
+                                        var b = DashState.phoneBattery;
+                                        return b > 80 ? "battery-full"
+                                             : b > 50 ? "battery-good"
+                                             : b > 20 ? "battery-low"
+                                             : "battery-caution";
+                                    }
+                                    implicitWidth: 14
+                                    implicitHeight: 14
+                                }
+                                Text {
+                                    text: DashState.phoneBattery >= 0
+                                          ? DashState.phoneBattery + "%" : "—"
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                                }
+                                Text {
+                                    visible: DashState.phoneSignal >= 0 && DashState.phoneNetType !== ""
+                                    text: "· " + DashState.phoneNetType
+                                    font.pixelSize: 10
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
+                                }
+                                Text {
+                                    visible: DashState.phoneCharging
+                                    text: "· charging"
+                                    font.pixelSize: 10
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
+                                }
+                                Item { Layout.fillWidth: true }
+                                Kirigami.Icon {
+                                    visible: appsTab.phoneDev && appsTab.phoneDev.reachable
+                                    source: "network-wireless-connected"
+                                    implicitWidth: 12
+                                    implicitHeight: 12
+                                    opacity: 0.55
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 4
+                                radius: 2
+                                visible: DashState.phoneBattery >= 0
+                                color: Qt.alpha(Kirigami.Theme.textColor, 0.1)
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width * Math.max(0, Math.min(1, DashState.phoneBattery / 100))
+                                    radius: 2
+                                    color: DashState.phoneCharging ? "#4fc3f7"
+                                         : (DashState.phoneBattery >= 0 && DashState.phoneBattery <= 20
+                                            ? Kirigami.Theme.negativeTextColor : appsTab.accent)
+                                    Behavior on width {
+                                        NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PhoneLabel { text2: "ACTIONS" }
+
+                // actions
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Repeater {
+                        model: [
+                            { lbl: "Ring",    icn: "bell",                             act: "ring"     },
+                            { lbl: "Ping",    icn: "preferences-desktop-notification", act: "ping"     },
+                            { lbl: "Control", icn: "input-mouse",                      act: "touchpad" },
+                            { lbl: "Notifs",  icn: "dialog-information",               act: "notifs"   }
+                        ]
+
+                        delegate: PhoneAction {
+                            required property var modelData
+                            lbl: modelData.lbl
+                            icn: modelData.icn
+                            enabled: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+                            sel: (modelData.act === "touchpad" && appsTab.touchpadOn)
+                              || (modelData.act === "notifs" && appsTab.notifOpen)
+                            onTriggered: {
+                                if (modelData.act === "touchpad") {
+                                    appsTab.touchpadOn = !appsTab.touchpadOn;
+                                } else if (modelData.act === "notifs") {
+                                    appsTab.notifOpen = !appsTab.notifOpen;
+                                    if (appsTab.notifOpen) { DashState.fetchPhoneNotifs(); }
+                                } else {
+                                    DashState.phoneAction(modelData.act);
+                                    if (modelData.act === "ring") {
+                                        appsTab.showPhoneToast("Ringing your phone…", "bell");
+                                    } else if (modelData.act === "ping") {
+                                        appsTab.showPhoneToast("Ping sent", "preferences-desktop-notification");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PhoneLabel {
+                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+                    text2: "SEND TO PHONE"
+                }
+
+                // second row: send / share actions
+                RowLayout {
+                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Repeater {
+                        model: [
+                            { lbl: "File",     icn: "document-send", act: "file"      },
+                            { lbl: "Clipboard",icn: "edit-copy",     act: "clipboard" },
+                            { lbl: "Browse",   icn: "folder-remote", act: "browse"    },
+                            { lbl: "Commands", icn: "system-run",    act: "commands"  }
+                        ]
+
+                        delegate: PhoneAction {
+                            required property var modelData
+                            lbl: modelData.lbl
+                            icn: modelData.icn
+                            onTriggered: {
+                                if (modelData.act === "file") {
+                                    DashState.phoneAction("sharefile");
+                                } else if (modelData.act === "commands") {
+                                    DashState.phoneAction("notifycommands");
+                                    appsTab.showPhoneToast("Fetching phone commands…", "system-run");
+                                } else {
+                                    DashState.phoneAction(modelData.act);
+                                    if (modelData.act === "clipboard") {
+                                        appsTab.showPhoneToast("Clipboard sent to phone", "edit-copy");
+                                    } else if (modelData.act === "browse") {
+                                        appsTab.showPhoneToast("Mounting phone storage…", "folder-remote");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // virtual touchpad (mouse control)
+                PhoneSection {
+                    open: appsTab.touchpadOn
+                          && appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+
+                    Rectangle {
+                        id: touchpad
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        radius: 14
+                        color: touchDrag.containsMouse
+                               ? Qt.alpha(Kirigami.Theme.textColor, 0.06)
+                               : Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                        border.width: 1
+                        border.color: touchDrag.pressed
+                                      ? Qt.alpha(appsTab.accent, 0.5)
+                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                        Behavior on border.color {
+                            ColorAnimation { duration: 130 }
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: touchDrag.pressed ? "controlling…" : "drag to move · tap to click · scroll to scroll"
+                            font.pixelSize: 10
+                            color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
+                        }
+
+                        MouseArea {
+                            id: touchDrag
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.BlankCursor
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                            property real accX: 0
+                            property real accY: 0
+                            property point last: Qt.point(0, 0)
+
+                            onPressed: (mouse) => {
+                                last = Qt.point(mouse.x, mouse.y);
+                                accX = 0;
+                                accY = 0;
+                                cursorTimer.restart();
+                            }
+                            onPositionChanged: (mouse) => {
+                                accX += mouse.x - last.x;
+                                accY += mouse.y - last.y;
+                                last = Qt.point(mouse.x, mouse.y);
+                            }
+                            onReleased: (mouse) => {
+                                cursorTimer.stop();
+                                if (Math.abs(accX) + Math.abs(accY) < 4) {
+                                    DashState.phoneAction("click", "single");  // tap = left click
+                                } else {
+                                    DashState.phoneAction("cursor", Math.round(accX), Math.round(accY));
+                                }
+                                accX = 0;
+                                accY = 0;
+                            }
+                            onCanceled: cursorTimer.stop()
+                            onWheel: (wheel) => {
+                                var steps = wheel.angleDelta.y / 120;
+                                if (steps === 0) { steps = wheel.angleDelta.y > 0 ? 1 : -1; }
+                                DashState.phoneAction("scroll", Math.round(steps));
+                            }
+                        }
+                    }
+
+                    Timer {
+                        id: cursorTimer
+                        interval: 60
+                        repeat: true
+                        running: false
+                        onTriggered: {
+                            if (Math.abs(touchDrag.accX) + Math.abs(touchDrag.accY) >= 1) {
+                                DashState.phoneAction("cursor",
+                                                      Math.round(touchDrag.accX),
+                                                      Math.round(touchDrag.accY));
+                                touchDrag.accX = 0;
+                                touchDrag.accY = 0;
+                            }
+                        }
+                    }
+
+                    // click buttons
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Repeater {
+                            model: [
+                                { lbl: "Left",   icn: "input-mouse", act: "single" },
+                                { lbl: "Double", icn: "input-mouse", act: "double" },
+                                { lbl: "Right",  icn: "input-mouse", act: "right"  }
+                            ]
+
+                            delegate: PhoneAction {
+                                required property var modelData
+                                lbl: modelData.lbl
+                                icn: modelData.icn
+                                onTriggered: DashState.phoneAction("click", modelData.act)
+                            }
+                        }
+                    }
+                }
+
+                // inputs: send a link + type on the phone
+                ColumnLayout {
+                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    // send-a-link input
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 38
+                        radius: 10
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                        border.width: 1
+                        border.color: linkInput.activeFocus
+                                      ? Qt.alpha(appsTab.accent, 0.5)
+                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                        Behavior on border.color {
+                            ColorAnimation { duration: 130 }
+                        }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 6
+                            spacing: 6
+
+                            Kirigami.Icon {
+                                source: "insert-link"
+                                implicitWidth: 14
+                                implicitHeight: 14
+                                opacity: 0.55
+                            }
+                            QQC2.TextField {
+                                id: linkInput
+                                Layout.fillWidth: true
+                                placeholderText: "Paste a link to send…"
+                                font.pixelSize: 11
+                                color: Kirigami.Theme.textColor
+                                background: null
+                                selectByMouse: true
+                                onAccepted: appsTab.sendPhoneLink()
+                            }
+                            PC3.ToolButton {
+                                icon.name: "document-send"
+                                icon.width: 14
+                                icon.height: 14
+                                display: QQC2.AbstractButton.IconOnly
+                                enabled: linkInput.text.length > 0
+                                opacity: enabled ? 1 : 0.35
+                                onClicked: appsTab.sendPhoneLink()
+                                QQC2.ToolTip { text: "Send link to phone"; delay: 300 }
+                            }
+                        }
+                    }
+
+                    // type-on-phone input
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 38
+                        radius: 10
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                        border.width: 1
+                        border.color: typeInput.activeFocus
+                                      ? Qt.alpha(appsTab.accent, 0.5)
+                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                        Behavior on border.color {
+                            ColorAnimation { duration: 130 }
+                        }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 6
+                            spacing: 6
+
+                            Kirigami.Icon {
+                                source: "input-keyboard"
+                                implicitWidth: 14
+                                implicitHeight: 14
+                                opacity: 0.55
+                            }
+                            QQC2.TextField {
+                                id: typeInput
+                                Layout.fillWidth: true
+                                placeholderText: "Type on your phone…"
+                                font.pixelSize: 11
+                                color: Kirigami.Theme.textColor
+                                background: null
+                                selectByMouse: true
+                                onAccepted: appsTab.typeOnPhone()
+                            }
+                            PC3.ToolButton {
+                                icon.name: "document-send"
+                                icon.width: 14
+                                icon.height: 14
+                                display: QQC2.AbstractButton.IconOnly
+                                enabled: typeInput.text.length > 0
+                                opacity: enabled ? 1 : 0.35
+                                onClicked: appsTab.typeOnPhone()
+                                QQC2.ToolTip { text: "Type into the phone"; delay: 300 }
+                            }
+                        }
+                    }
+                }
+
+                // phone notifications
+                PhoneSection {
+                    open: appsTab.notifOpen
+                          && appsTab.phoneDev !== null && appsTab.phoneDev.reachable
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Text {
+                            text: "PHONE NOTIFICATIONS"
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 1.2
+                            color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
+                        }
+                        Item { Layout.fillWidth: true }
+                        PC3.ToolButton {
+                            icon.name: "view-refresh"
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            display: QQC2.AbstractButton.IconOnly
+                            onClicked: DashState.fetchPhoneNotifs()
+                            QQC2.ToolTip { text: "Refresh"; delay: 300 }
+                        }
+                    }
+
+                    Text {
+                        visible: DashState.phoneNotifs.length === 0
+                        text: "No notifications on your phone"
+                        font.pixelSize: 10
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+
+                    Repeater {
+                        model: DashState.phoneNotifs
+
+                        delegate: Rectangle {
+                            id: notifRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            implicitHeight: notifCol.implicitHeight + 16
+                            radius: 10
+                            color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
+                            border.width: 1
+                            border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
+
+                            ColumnLayout {
+                                id: notifCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.margins: 8
+                                spacing: 2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: notifRow.modelData.app !== ""
+                                              ? notifRow.modelData.app : "Notification"
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 0.5
+                                        elide: Text.ElideRight
+                                        color: Qt.alpha(appsTab.accent, 0.9)
+                                    }
+                                    Kirigami.Icon {
+                                        visible: notifRow.modelData.dismissable
+                                        source: "window-close"
+                                        isMask: true
+                                        implicitWidth: 12
+                                        implicitHeight: 12
+                                        opacity: notifDismissHover.hovered ? 0.9 : 0.5
+                                        Layout.alignment: Qt.AlignVCenter
+
+                                        HoverHandler { id: notifDismissHover; cursorShape: Qt.PointingHandCursor }
+                                        TapHandler {
+                                            onTapped: {
+                                                DashState.phoneAction("notifdismiss", notifRow.modelData.id);
+                                                appsTab.showPhoneToast("Notification dismissed", "window-close");
+                                                notifDismissTimer.restart();
+                                            }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: notifRow.modelData.title !== ""
+                                          ? notifRow.modelData.title : "—"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.8)
+                                }
+                            }
+                        }
+                    }
+
+                    Timer {
+                        id: notifDismissTimer
+                        interval: 900
+                        onTriggered: DashState.fetchPhoneNotifs()
+                    }
+                }
+
+                // phone media card
+                Rectangle {
+                    visible: appsTab.phoneDev !== null
+                             && appsTab.phoneDev.reachable
+                             && DashState.phoneMedia !== null
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 108
+                    radius: 14
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                    border.width: 1
+                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            Item {
+                                Layout.preferredWidth: 40
+                                Layout.preferredHeight: 40
+                                Layout.alignment: Qt.AlignVCenter
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 10
+                                    visible: phoneArt.status !== Image.Ready
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                                    Kirigami.Icon {
+                                        anchors.centerIn: parent
+                                        source: "audio-x-generic"
+                                        isMask: true
+                                        color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
+                                        implicitWidth: 18
+                                        implicitHeight: 18
+                                    }
+                                }
+
+                                Image {
+                                    id: phoneArt
+                                    anchors.fill: parent
+                                    visible: false
+                                    source: DashState.phoneMedia && DashState.phoneMedia.art
+                                            ? DashState.phoneMedia.art : ""
+                                    fillMode: Image.PreserveAspectCrop
+                                    smooth: true
+                                    asynchronous: true
+                                }
+
+                                MultiEffect {
+                                    anchors.fill: parent
+                                    source: phoneArt
+                                    maskEnabled: true
+                                    maskSource: Rectangle {
+                                        width: 40
+                                        height: 40
+                                        radius: 10
+                                        visible: false
+                                    }
+                                    maskThresholdMin: 0.1
+                                    maskSpreadAtMin: 1.0
+                                    visible: phoneArt.status === Image.Ready
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
+                                spacing: 2
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: DashState.phoneMedia && DashState.phoneMedia.title
+                                          ? DashState.phoneMedia.title
+                                          : "Nothing playing on your phone"
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                    color: DashState.phoneMedia ? Kirigami.Theme.textColor
+                                         : Qt.alpha(Kirigami.Theme.textColor, 0.45)
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: DashState.phoneMedia && DashState.phoneMedia.artist
+                                          ? DashState.phoneMedia.artist : "—"
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
+                                }
+                            }
+                        }
+
+                        Row {
+                            Layout.alignment: Qt.AlignHCenter
+                            spacing: 14
+
+                            PC3.ToolButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                icon.name: "media-skip-backward"
+                                icon.width: 15
+                                icon.height: 15
+                                display: QQC2.AbstractButton.IconOnly
+                                onClicked: DashState.phoneAction("prev")
+                            }
+
+                            Item {
+                                width: 34
+                                height: 34
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 17
+                                    color: appsTab.accent
+                                    scale: phonePlayHover.hovered ? 1.1 : 1.0
+                                    Behavior on scale {
+                                        NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+                                    }
+                                }
+                                HoverHandler { id: phonePlayHover }
+                                Kirigami.Icon {
+                                    anchors.centerIn: parent
+                                    source: DashState.phoneMedia && DashState.phoneMedia.status === "Playing"
+                                            ? "media-playback-pause" : "media-playback-start"
+                                    isMask: true
+                                    color: appsTab.onAccent
+                                    implicitWidth: 15
+                                    implicitHeight: 15
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (DashState.phoneMedia && DashState.phoneMedia.status === "Playing") {
+                                            DashState.phoneAction("pause");
+                                        } else {
+                                            DashState.phoneAction("play");
+                                        }
+                                    }
+                                }
+                            }
+
+                            PC3.ToolButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                icon.name: "media-skip-forward"
+                                icon.width: 15
+                                icon.height: 15
+                                display: QQC2.AbstractButton.IconOnly
+                                onClicked: DashState.phoneAction("next")
+                            }
+                        }
+                    }
+                }
+
+                // empty state
+                ColumnLayout {
+                    visible: appsTab.phoneDev === null
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 8
+
+                    Item {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 64
+                        Layout.preferredHeight: 64
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 32
+                            color: Qt.alpha(appsTab.accent, 0.12)
+                            border.width: 1
+                            border.color: Qt.alpha(appsTab.accent, 0.4)
+                        }
+                        Kirigami.Icon {
+                            anchors.centerIn: parent
+                            source: "smartphone"
+                            isMask: true
+                            color: appsTab.accent
+                            implicitWidth: 28
+                            implicitHeight: 28
+                        }
+                    }
+                    Text {
+                        text: "No phone connected"
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text {
+                        text: "Pair a device with KDE Connect, or search again."
+                        font.pixelSize: 10
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    PC3.Button {
+                        text: "Search again"
+                        icon.name: "view-refresh"
+                        Layout.alignment: Qt.AlignHCenter
+                        onClicked: {
+                            DashState.phoneAction("refresh");
+                            phoneRefreshTimer.restart();
+                        }
+                    }
+                }
+                    }
+                }
+
+                // toast feedback
+                Rectangle {
+                    id: phoneToast
+                    property bool shown: appsTab._phoneToast !== ""
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 8
+                    width: Math.min(parent.width - 24, toastText.implicitWidth + 30)
+                    height: 30
+                    radius: 15
+                    color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.95)
+                    border.width: 1
+                    border.color: Qt.alpha(appsTab.accent, 0.45)
+                    opacity: shown ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation { duration: 180 }
+                    }
+                    z: 10
+
+                    RowLayout {
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Kirigami.Icon {
+                            source: appsTab._phoneToastIcon !== ""
+                                    ? appsTab._phoneToastIcon : "dialog-information"
+                            isMask: true
+                            implicitWidth: 13
+                            implicitHeight: 13
+                            color: appsTab.accent
+                            visible: appsTab._phoneToastIcon !== ""
+                        }
+                        Text {
+                            id: toastText
+                            text: appsTab._phoneToast
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            color: Kirigami.Theme.textColor
+                        }
+                    }
+                }
+            }
+
+            // phone panel toggle (top-right corner of the sidebar)
+            Rectangle {
+                id: phoneBtn
+                visible: !appsTab.phoneMode && !appsTab.detailedInfo
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 2
+                anchors.rightMargin: 2
+                width: 26
+                height: 26
+                radius: 13
+                color: phoneBtnHover.hovered
+                       ? Qt.alpha(Kirigami.Theme.textColor, 0.09)
+                       : Qt.alpha(Kirigami.Theme.textColor, 0.045)
+                border.width: 1
+                border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                Behavior on color {
+                    ColorAnimation { duration: 130 }
+                }
+
+                Kirigami.Icon {
+                    anchors.centerIn: parent
+                    source: "smartphone"
+                    isMask: true
+                    implicitWidth: 13
+                    implicitHeight: 13
+                    color: phoneBtnHover.hovered ? appsTab.accent
+                          : Qt.alpha(Kirigami.Theme.textColor, 0.65)
+                    Behavior on color {
+                        ColorAnimation { duration: 130 }
+                    }
+                }
+
+                HoverHandler {
+                    id: phoneBtnHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    onTapped: {
+                        appsTab.phoneMode = true;
+                        DashState.refreshPhone();
+                    }
+                }
+                QQC2.ToolTip {
+                    visible: phoneBtnHover.hovered
+                    text: "Phone · KDE Connect"
+                    delay: 400
+                }
+            }
         }
     }
 
@@ -1816,6 +2966,7 @@ Item {
     component AppTile: Item {
         id: tile
         required property var modelData
+        required property int index
 
         property int tileW: 92
 
@@ -1827,23 +2978,75 @@ Item {
         readonly property bool keySel:
             appsTab.selAppId !== "" && tile.modelData.id === appsTab.selAppId
 
+        // this tile is the one being dragged (it rides to the hovered slot)
+        readonly property bool dragSel:
+            appsTab.pinDragActive && appsTab.pinDragId === tile.modelData.id
+
+        // a tap right after a real drag must not launch the app
+        property bool wasDragged: false
+
+        // the app as a URL — this is what the taskbar's drop handler requires:
+        // Backend::isApplication() only accepts LOCAL FILE urls of desktop
+        // files (url.isLocalFile() + KDesktopFile check), i.e. the exact
+        // payload the KDE launcher hands over on a drag. Our scanned paths
+        // always live in standard application dirs, so KSycoca knows them.
+        readonly property string appUrl:
+            "file://" + encodeURI(tile.modelData.path || "")
+
         width: tileW
         height: 100
-        opacity: (appsTab.pinDragActive && appsTab.pinDragId === tile.modelData.id) ? 0.55 : 1.0
-        scale: {
-            if (dragArea.dragMode) { return 0.92 }                     // being dragged
-            if (dragArea.pressed && tile.reorderable) { return 0.97 }  // holding
-            return 1.0
-        }
-        Behavior on scale {
-            NumberAnimation { duration: 120 }
-        }
-        Behavior on opacity {
-            NumberAnimation { duration: 120 }
+
+        // Kickoff-style live shuffle: while a pinned drag is active, every
+        // tile translates to open the slot under the pointer — the dragged
+        // tile rides to the hovered slot and the ones in between slide one
+        // slot toward the source, so the grid seems to flow around the drag
+        transform: Translate {
+            x: appsTab.pinDisplacement(tile.index).x
+            y: appsTab.pinDisplacement(tile.index).y
+
+            Behavior on x {
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            }
+            Behavior on y {
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            }
         }
 
         Component.onCompleted: appsTab.registerTile(tile)
         Component.onDestruction: appsTab.unregisterTile(tile)
+
+        // native system drag (exactly how the KDE launcher's delegates do
+        // it): press + move lifts the app out of the widget with a snapshot
+        // of the tile as the drag image. Drop it on the taskbar to add a
+        // launcher, on the desktop, or on any window — or keep it inside the
+        // widget to reorder the Pinned grid (the content DropArea handles
+        // the shuffle and the undo-on-exit).
+        DragHandler {
+            id: tileDrag
+            target: null
+            onActiveChanged: {
+                if (active) {
+                    tile.wasDragged = true
+                    appsTab.noteTileDrag(tile)
+                    tile.grabToImage(function(result) {
+                        tile.Drag.imageSource = result.url
+                        tile.Drag.active = true
+                    })
+                } else {
+                    tile.Drag.active = false
+                    // clear immediately: a tap cancelled by this drag must
+                    // never swallow the NEXT click's launch
+                    tile.wasDragged = false
+                    appsTab.endTileDrag()
+                }
+            }
+        }
+        Drag.dragType: Drag.Automatic
+        Drag.supportedActions: Qt.CopyAction
+        Drag.proposedAction: Qt.CopyAction
+        Drag.hotSpot.x: width / 2
+        Drag.hotSpot.y: height / 2
+        Drag.mimeData: { "text/uri-list": [tile.appUrl] }
 
         // input handlers are declared before everything that binds to them,
         // so first-time binding evaluation never sees an undefined id
@@ -1854,43 +3057,34 @@ Item {
 
         TapHandler {
             id: tileTap
-            enabled: !tile.reorderable
-            onTapped: DashState.launch(tile.modelData.path, tile.modelData.id)
+            onTapped: {
+                if (!tile.wasDragged) {
+                    DashState.launch(tile.modelData.path, tile.modelData.id)
+                }
+                tile.wasDragged = false
+            }
         }
 
-        // keyboard-selector halo
+        // keyboard-selector halo / dragged-tile highlight
         Rectangle {
             anchors.fill: parent
             anchors.margins: 1
             radius: 15
-            opacity: tile.keySel ? 1 : 0
+            opacity: (tile.keySel || tile.dragSel) ? 1 : 0
             color: Qt.alpha(appsTab.accent, 0.10)
             Behavior on opacity {
                 NumberAnimation { duration: 110 }
             }
         }
 
-        // hold-to-drag feedback ring
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: -4
-            radius: 18
-            color: "transparent"
-            border.color: appsTab.accent
-            border.width: dragArea.armed ? 2 : 0
-            opacity: dragArea.armed ? 0.9 : 0
-            Behavior on opacity { NumberAnimation { duration: 120 } }
-            Behavior on border.width { NumberAnimation { duration: 120 } }
-        }
-
         Rectangle {
             anchors.fill: parent
             anchors.margins: 3
             radius: 14
-            color: tile.keySel
+            color: (tile.keySel || tile.dragSel)
                    ? Qt.alpha(appsTab.accent, 0.14)
                    : Qt.alpha(Kirigami.Theme.textColor, tileHover.hovered ? 0.08 : 0)
-            border.width: tile.keySel ? 1.5 : 0
+            border.width: (tile.keySel || tile.dragSel) ? 1.5 : 0
             border.color: appsTab.accent
             scale: tileTap.pressed ? 0.94 : 1.0
             Behavior on color {
@@ -1912,8 +3106,8 @@ Item {
             Kirigami.Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 source: tile.modelData.icon
-                implicitWidth: 46
-                implicitHeight: 46
+                implicitWidth: 47
+                implicitHeight: 47
             }
 
             Text {
@@ -1930,84 +3124,7 @@ Item {
             }
         }
 
-        // hold-to-drag (Pinned tab only): press and hold 0.6 s to lift the
-        // tile, then move it to choose a new slot — a quick press launches the
-        // app instead. In other tabs this MouseArea is disabled and the
-        // TapHandler below handles launching.
-        MouseArea {
-            id: dragArea
-            anchors.fill: parent
-            z: 100
-            enabled: tile.reorderable
-            hoverEnabled: false
-            cursorShape: Qt.PointingHandCursor
-
-            // pressed, not yet lifted: the tile is charging up the hold
-            readonly property bool armed: pressed && !dragMode
-            property bool dragMode: false
-            property point dragStart: Qt.point(0, 0)
-            property bool moved: false
-            property double pressTime: 0
-
-            // the lift-off delay — holding still for this long starts the drag
-            Timer {
-                id: holdTimer
-                interval: 600
-                onTriggered: {
-                    if (!dragArea.pressed || dragArea.dragMode) { return; }
-                    dragArea.dragMode = true
-                    dragArea.preventStealing = true
-                    var p = dragArea.mapToItem(scroller.contentItem,
-                                                dragArea.mouseX, dragArea.mouseY)
-                    appsTab.beginPinDrag(tile, p.x, p.y)
-                }
-            }
-
-            onPressed: function(mouse) {
-                dragArea.dragMode = false
-                dragArea.moved = false
-                dragArea.pressTime = Date.now()
-                var p = dragArea.mapToItem(scroller.contentItem, mouse.x, mouse.y)
-                dragArea.dragStart = p
-                holdTimer.restart()
-            }
-            onPositionChanged: function(mouse) {
-                var c = dragArea.mapToItem(scroller.contentItem, mouse.x, mouse.y)
-                if (!dragArea.dragMode) {
-                    // moving before the delay fires cancels it: that gesture is
-                    // a scroll or a swipe, not a hold. The Flickable is still
-                    // free to steal the pointer and scroll the grid.
-                    if (Math.abs(c.x - dragArea.dragStart.x)
-                            + Math.abs(c.y - dragArea.dragStart.y) > 8) {
-                        dragArea.moved = true
-                        holdTimer.stop()
-                    }
-                    return
-                }
-                appsTab.updatePinDrag(c.x, c.y)
-            }
-            onReleased: function(mouse) {
-                holdTimer.stop()
-                var held = Date.now() - dragArea.pressTime
-                if (dragArea.dragMode) {
-                    appsTab.endPinDrag(true)
-                } else if (!dragArea.moved && held < 500) {
-                    // quick press → launch; a near-miss on the hold stays put
-                    DashState.launch(tile.modelData.path, tile.modelData.id)
-                }
-                dragArea.dragMode = false
-                dragArea.preventStealing = false
-            }
-            onCanceled: function() {
-                holdTimer.stop()
-                if (dragArea.dragMode) { appsTab.endPinDrag(false) }
-                dragArea.dragMode = false
-                dragArea.preventStealing = false
-            }
-        }
-
-        // pin toggle (z above dragArea so the star stays clickable in the
-        // Pinned tab, where dragArea covers the whole tile)
+        // pin toggle (the star stays clickable everywhere on the tile)
         Item {
             width: 24
             height: 24

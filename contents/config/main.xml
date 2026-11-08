@@ -7,8 +7,8 @@
   <group name="General">
 
     <entry name="panelIcon" type="String">
-      <label>The icon shown for the widget in the panel.</label>
-      <default>dashboard-show</default>
+      <label>The icon shown for the widget in the panel. Empty = auto (running distro's logo).</label>
+      <default></default>
     </entry>
 
     <entry name="refreshInterval" type="Int">

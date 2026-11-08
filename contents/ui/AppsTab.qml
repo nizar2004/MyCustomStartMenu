@@ -1131,8 +1131,12 @@ Item {
                             Layout.fillWidth: true
                             spacing: 7
                             Kirigami.Icon {
-                                source: DashState.osLogo() !== ""
-                                        ? DashState.osLogo() : "computer-symbolic"
+                                // direct property reads so this updates when
+                                // osid.sh reports the distro (a function call
+                                // here would freeze on its first evaluation)
+                                source: DashState.osLogos[DashState.osId]
+                                        ? Qt.resolvedUrl("../icons/" + DashState.osLogos[DashState.osId]).toString()
+                                        : "computer-symbolic"
                                 implicitWidth: 14
                                 implicitHeight: 14
                             }

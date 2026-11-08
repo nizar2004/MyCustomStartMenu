@@ -210,11 +210,11 @@ QtObject {
     property string osPretty: ""   // e.g. "Arch Linux"
 
     readonly property var osLogos: ({
-        "arch": "os-arch.svg",
-        "cachyos": "os-cachyos.svg",
-        "ubuntu": "os-ubuntu.svg",
-        "linuxmint": "os-mint.svg",
-        "manjaro": "os-manjaro.svg"
+        "arch": "os-arch.png",
+        "cachyos": "os-cachyos.png",
+        "ubuntu": "os-ubuntu.png",
+        "linuxmint": "os-mint.png",
+        "manjaro": "os-manjaro.png"
     })
 
     // bundled distro logo for the running OS, or "" when we have none

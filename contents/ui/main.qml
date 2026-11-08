@@ -11,13 +11,21 @@ PlasmoidItem {
 
     // shortcut icon: explicit user choice wins; otherwise the running
     // distro's bundled logo (Arch/CachyOS/Ubuntu/Mint/Manjaro detected at
-    // runtime from /etc/os-release); otherwise the generic fallback
-    readonly property string shortcutIcon:
-        Plasmoid.configuration.panelIcon !== "" ?
-            Plasmoid.configuration.panelIcon :
-            (DashState.osLogo() !== "" ? DashState.osLogo() : "dashboard-show")
+    // runtime from /etc/os-release); otherwise the generic fallback.
+    // NOTE: reads DashState.osId/osLogos DIRECTLY so the binding re-evaluates
+    // when osid.sh reports in (a function call like osLogo() would freeze
+    // on its first evaluation — that's why the icon stayed blank).
+    readonly property string shortcutIcon: {
+        var cfg = Plasmoid.configuration.panelIcon;
+        if (cfg !== "") { return cfg; }
+        var file = DashState.osLogos[DashState.osId];
+        return file ? Qt.resolvedUrl("../icons/" + file).toString() : "dashboard-show";
+    }
 
-    Plasmoid.icon: root.shortcutIcon
+    // meta icon (widget explorer, tooltips): theme-safe name — the visible
+    // panel button is drawn by Compact below, using the distro logo
+    Plasmoid.icon: Plasmoid.configuration.panelIcon !== ""
+                   ? Plasmoid.configuration.panelIcon : "dashboard-show"
 
     toolTipMainText: DashState.osPretty !== "" ? DashState.osPretty : "Custom Start Menu"
     toolTipSubText: {
@@ -71,27 +79,27 @@ PlasmoidItem {
     component Compact: Item {
         id: comp
 
-        // Use Image for bundled distro logos (file://) and Kirigami.Icon for theme names
+        // Bundled distro logos are local file URLs → render with Image (PNG is
+        // bulletproof in QML). If the image errors or is empty, fall back to
+        // the generic theme icon so the button is never blank.
         Image {
             id: logoImg
             anchors.fill: parent
+            // slightly smaller than the button slot so it doesn't touch the edges
+            anchors.margins: Math.round(parent.width * 0.10)
             source: {
                 var s = root.shortcutIcon;
-                return (s && s.startsWith("file://")) ? s : "";
+                return (s && s.indexOf("file://") === 0) ? s : "";
             }
-            visible: source !== ""
             fillMode: Image.PreserveAspectFit
             smooth: true
-            mipmap: true
+            asynchronous: false
         }
 
         Kirigami.Icon {
             anchors.fill: parent
-            source: {
-                var s = root.shortcutIcon;
-                return (!s || s.startsWith("file://")) ? "dashboard-show" : s;
-            }
-            visible: logoImg.visible ? false : true
+            visible: logoImg.source === "" || logoImg.status === Image.Error
+            source: "dashboard-show"
             active: compHover.hovered
         }
 

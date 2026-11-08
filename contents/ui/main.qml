@@ -12,13 +12,10 @@ PlasmoidItem {
     // shortcut icon: explicit user choice wins; otherwise the running
     // distro's bundled logo (Arch/CachyOS/Ubuntu/Mint/Manjaro detected at
     // runtime from /etc/os-release); otherwise the generic fallback
-    readonly property string shortcutIcon: {
-        if (Plasmoid.configuration.panelIcon !== "") {
-            return Plasmoid.configuration.panelIcon;
-        }
-        var logo = DashState.osLogo();
-        return logo !== "" ? logo : "dashboard-show";
-    }
+    readonly property string shortcutIcon:
+        Plasmoid.configuration.panelIcon !== "" ?
+            Plasmoid.configuration.panelIcon :
+            (DashState.osLogo() !== "" ? DashState.osLogo() : "dashboard-show")
 
     Plasmoid.icon: root.shortcutIcon
 
@@ -74,9 +71,27 @@ PlasmoidItem {
     component Compact: Item {
         id: comp
 
+        // Use Image for bundled distro logos (file://) and Kirigami.Icon for theme names
+        Image {
+            id: logoImg
+            anchors.fill: parent
+            source: {
+                var s = root.shortcutIcon;
+                return (s && s.startsWith("file://")) ? s : "";
+            }
+            visible: source !== ""
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+            mipmap: true
+        }
+
         Kirigami.Icon {
             anchors.fill: parent
-            source: root.shortcutIcon
+            source: {
+                var s = root.shortcutIcon;
+                return (!s || s.startsWith("file://")) ? "dashboard-show" : s;
+            }
+            visible: logoImg.visible ? false : true
             active: compHover.hovered
         }
 

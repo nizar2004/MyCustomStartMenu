@@ -50,6 +50,8 @@ PlasmoidItem {
     }
 
     onExpandedChanged: expanded => {
+        // fast refresh while open, slow idle tick while collapsed
+        DashState.setSysPollForeground(expanded);
         if (expanded) {
             DashState.resetView();
             // pick up newly installed/removed apps and pin changes

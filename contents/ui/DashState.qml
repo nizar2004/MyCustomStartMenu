@@ -197,11 +197,13 @@ QtObject {
     readonly property url infoUrl: Qt.resolvedUrl("../code/sysinfo.sh")
     readonly property url favsUrl: Qt.resolvedUrl("../code/readfavs.sh")
     readonly property url osUrl: Qt.resolvedUrl("../code/osid.sh")
+    readonly property url recentUrl: Qt.resolvedUrl("../code/recent.sh")
     readonly property string sysCmd: "sh " + shUrl(sysUrl)
     readonly property string scanCmd: "sh " + shUrl(scanUrl)
     readonly property string infoCmd: "sh " + shUrl(infoUrl)
     readonly property string favsCmd: "sh " + shUrl(favsUrl)
     readonly property string osCmd: "sh " + shUrl(osUrl)
+    readonly property string recentCmd: "sh " + shUrl(recentUrl) + " list"
 
     // -------- running distro (panel icon + tooltips) --------
     // osid.sh reports "ID<TAB>Pretty Name" from /etc/os-release; the widget
@@ -235,7 +237,51 @@ QtObject {
 
     // configurable refresh rate (ms); wired from the widget settings
     property int refreshInterval: 1500
-    onRefreshIntervalChanged: run.interval = refreshInterval
+
+    // ------------------------------------------------------------------
+    // System poll lifecycle
+    // ------------------------------------------------------------------
+    // The executable engine only runs while a source is connected, so the
+    // system poll is tied to the popup: expanded → the user's refresh rate
+    // (1.5 s by default), collapsed → a slow 10 s tick that still keeps the
+    // compact tooltip roughly live. This keeps an idle desktop free of the
+    // constant `sysmon.sh` spawn every 1.5 s.
+    property bool sysPollForeground: false
+    property bool _sysPollActive: false
+    property int _sysPollInterval: 0
+
+    function startSysPoll(ms) {
+        if (ms === undefined) { ms = refreshInterval; }
+        if (ms < 250) { ms = 250; }
+        if (_sysPollActive && _sysPollInterval === ms) { return; }
+        if (_sysPollActive) {
+            run.disconnectSource(sysCmd);
+            _sysPollActive = false;
+        }
+        _sysPollInterval = ms;
+        _sysPollActive = true;
+        // the plasma5support engine takes the polling rate from the data
+        // source's interval property — connectSource() only accepts a name
+        run.interval = ms;
+        run.connectSource(sysCmd);
+    }
+
+    function stopSysPoll() {
+        if (!_sysPollActive) { return; }
+        _sysPollActive = false;
+        _sysPollInterval = 0;
+        run.disconnectSource(sysCmd);
+    }
+
+    // called from the popup's expandedChanged: fast while open, slow idle
+    function setSysPollForeground(fg) {
+        sysPollForeground = fg;
+        startSysPoll(fg ? refreshInterval : 10000);
+    }
+
+    onRefreshIntervalChanged: {
+        if (sysPollForeground) { startSysPoll(refreshInterval); }
+    }
 
     function shUrl(u) {
         return sh(u.toString().replace(/^file:\/\//, ""));
@@ -278,6 +324,11 @@ QtObject {
                 disconnectSource(sourceName);
                 return;
             }
+            if (base === state.recentCmd) {
+                state.parseRecent(out);
+                disconnectSource(sourceName);
+                return;
+            }
             if (base === state.infoCmd) {
                 state.parseSysInfo(out);
                 disconnectSource(sourceName);
@@ -293,19 +344,62 @@ QtObject {
     }
 
     function init() {
-        run.connectSource(sysCmd);
-        rescanApps();
+        startSysPoll(10000);     // slow idle tick until the popup opens
+        rescanApps(true);
         readFavorites();
         readSysInfo();
         runOnce(osCmd);          // detect the distro once for the panel icon
+        readRecent();
     }
 
-    function rescanApps() {
+    // The desktop-file scan is comparatively expensive, and the widget
+    // re-scans on every open. Cache it for a short while so flipping the
+    // menu open/closed repeatedly doesn't spawn scanapps.sh each time.
+    property real _lastScanTime: 0
+
+    function rescanApps(force) {
+        var now = Date.now();
+        if (!force && appList.length > 0 && (now - _lastScanTime) < 30000) {
+            return;
+        }
+        _lastScanTime = now;
         runOnce(scanCmd);
     }
 
     function readFavorites() {
         runOnce(favsCmd);
+    }
+
+    // ------------------------------------------------------------------
+    // Recently used apps (Kickoff-style history)
+    // ------------------------------------------------------------------
+    property var recentIds: []          // desktop ids, most recent first
+
+    function readRecent() {
+        runOnce(recentCmd);
+    }
+
+    function parseRecent(text) {
+        var out = [];
+        var lines = String(text).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            var id = lines[i].trim();
+            if (id !== "" && out.indexOf(id) < 0) { out.push(id); }
+        }
+        recentIds = out;
+    }
+
+    // called from launch(): move the id to the top of the history, both in
+    // memory (the UI updates instantly) and on disk (persists across sessions)
+    function noteLaunch(id) {
+        if (id === undefined || id === null || String(id) === "") { return; }
+        id = String(id);
+        var next = [id];
+        for (var i = 0; i < recentIds.length && next.length < 12; i++) {
+            if (recentIds[i] !== id) { next.push(recentIds[i]); }
+        }
+        recentIds = next;
+        runOnce("sh " + shUrl(recentUrl) + " add " + sh(id));
     }
 
     function readSysInfo() {
@@ -498,7 +592,7 @@ QtObject {
                 id: a.id, name: a.name, icon: a.icon,
                 cat: cat.name, catIcon: cat.icon,
                 pinned: pinnedIds.indexOf(a.id) >= 0,
-                path: a.path,
+                path: a.path, exec: a.exec,
                 generic: a.generic, keywords: a.keywords
             });
         }
@@ -566,7 +660,16 @@ QtObject {
         // same shape as this widget's other engine commands.
         runOnce("sh " + shUrl(Qt.resolvedUrl("../code/launchapp.sh"))
               + " " + sh(String(path)) + " " + sh(String(id)));
+        noteLaunch(id);
         requestClose();
+    }
+
+    // open the folder that contains a .desktop file
+    function openContainingFolder(path) {
+        var p = String(path || "");
+        var idx = p.lastIndexOf("/");
+        if (idx <= 0) { return; }
+        runOnce("xdg-open " + sh(p.slice(0, idx)));
     }
 
     function togglePin(id) {

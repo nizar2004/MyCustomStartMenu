@@ -6,6 +6,7 @@ import QtQuick.Window
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PC3
+import org.kde.plasma.extras as PlasmaExtras
 import org.kde.plasma.private.mpris as Mpris
 import org.kde.kirigami as Kirigami
 import "js/Utils.js" as Utils
@@ -189,6 +190,38 @@ Item {
         selPos = p;
         selAppId = secs[s].apps[p] ? secs[s].apps[p].id : "";
         ensureSelVisible();
+    }
+
+    // Tab / Shift+Tab: walk the category rail without leaving the search box
+    function cycleCategory(dir) {
+        var n = chips.length;
+        if (n === 0) { return; }
+        var idx = 0;
+        for (var i = 0; i < n; i++) {
+            if (chips[i].key === filter) { idx = i; break; }
+        }
+        idx = (idx + dir + n) % n;
+        filter = chips[idx].key;
+        detailedInfo = false;
+        search = "";
+        searchField.text = "";
+        clearSel();
+        Qt.callLater(function() {
+            if (appsTab.sections.length > 0 && appsTab.sections[0].apps.length > 0) {
+                appsTab.setSel(0, 0);
+            }
+        });
+    }
+
+    // PageUp / PageDown: jump one viewport of tiles vertically
+    function pageSel(dir) {
+        if (sections.length === 0) { return; }
+        if (selSection < 0) { setSel(0, 0); return; }
+        var rows = Math.max(1, Math.floor(scroller.height / 102));
+        var step = Math.max(1, gridColsNow() * rows);
+        for (var i = 0; i < step; i++) {
+            moveSel(dir > 0 ? "down" : "up");
+        }
     }
 
     function launchSelected() {
@@ -396,6 +429,74 @@ Item {
         searchField.forceActiveFocus();
     }
 
+    // Clipboard helper for the tile context menu. Qt's TextEdit.copy()
+    // populates the system clipboard directly — no wl-copy/xclip needed
+    // (neither is installed on every Plasma system).
+    function copyToClipboard(text) {
+        if (text === undefined || text === null || String(text) === "") { return; }
+        clipHelper.text = String(text);
+        clipHelper.selectAll();
+        clipHelper.copy();
+        clipHelper.text = "";
+    }
+    TextEdit {
+        id: clipHelper
+        visible: false
+        width: 0
+        height: 0
+    }
+
+    // single shared context menu for app tiles (Plasma's native menu —
+    // a QQC2 popup inside a Plasma applet popup misbehaves on Wayland)
+    property var menuApp: null
+
+    function showTileMenu(app, anchor, pos) {
+        if (!app) { return; }
+        menuApp = app;
+        tileMenu.visualParent = anchor;
+        if (pos) { tileMenu.open(pos.x, pos.y); }
+        else { tileMenu.open(); }
+    }
+
+    PlasmaExtras.Menu {
+        id: tileMenu
+
+        PlasmaExtras.MenuItem {
+            text: "Launch"
+            icon: "media-playback-start"
+            onClicked: {
+                if (appsTab.menuApp) {
+                    DashState.launch(appsTab.menuApp.path, appsTab.menuApp.id);
+                }
+            }
+        }
+        PlasmaExtras.MenuItem {
+            text: appsTab.menuApp && appsTab.menuApp.pinned
+                  ? "Unpin from Pinned" : "Pin to Pinned"
+            icon: appsTab.menuApp && appsTab.menuApp.pinned
+                  ? "starred" : "non-starred"
+            onClicked: {
+                if (appsTab.menuApp) { DashState.togglePin(appsTab.menuApp.id); }
+            }
+        }
+        PlasmaExtras.MenuItem {
+            text: "Open Containing Folder"
+            icon: "folder-open"
+            onClicked: {
+                if (appsTab.menuApp) { DashState.openContainingFolder(appsTab.menuApp.path); }
+            }
+        }
+        PlasmaExtras.MenuItem {
+            text: "Copy Command"
+            icon: "edit-copy"
+            enabled: appsTab.menuApp && appsTab.menuApp.exec !== undefined
+                     && appsTab.menuApp.exec !== ""
+            onClicked: {
+                if (appsTab.menuApp) { appsTab.copyToClipboard(appsTab.menuApp.exec); }
+            }
+        }
+    }
+
     // focus the search bar shortly after the popup is created, so typing
     // immediately goes to search
     Timer {
@@ -421,6 +522,9 @@ Item {
             { key: "all", name: "All Apps", icon: "view-grid" },
             { key: "pinned", name: "Pinned", icon: "starred" }
         ];
+        if (DashState.recentIds.length > 0) {
+            out.push({ key: "recent", name: "Recently Used", icon: "document-open-recent" });
+        }
         var cats = {};
         var m = DashState.appsModel;
         for (var i = 0; i < m.count; i++) {
@@ -457,7 +561,8 @@ Item {
                 if (!hit) { continue; }
             } else {
                 if (filter === "pinned" && !app.pinned) { continue; }
-                if (filter !== "all" && filter !== "pinned" && app.cat !== filter) { continue; }
+                if (filter !== "all" && filter !== "pinned" && filter !== "recent"
+                        && app.cat !== filter) { continue; }
             }
             vis.push(app);
         }
@@ -470,6 +575,15 @@ Item {
                 return ia - ib;
             });
         }
+        // Recently Used follows the launch history, newest first
+        if (q === "" && filter === "recent") {
+            var rorder = DashState.recentIds;
+            vis.sort(function(a, b) {
+                var ia = rorder.indexOf(a.id); if (ia < 0) { ia = 999999; }
+                var ib = rorder.indexOf(b.id); if (ib < 0) { ib = 999999; }
+                return ia - ib;
+            });
+        }
         visibleApps = vis;
 
         // ----- sections -----
@@ -477,6 +591,8 @@ Item {
         var secs = [];
         if (q === "" && filter === "pinned") {
             secs = [{ name: "Pinned", icon: "starred", apps: vis }];
+        } else if (q === "" && filter === "recent") {
+            secs = [{ name: "Recently Used", icon: "document-open-recent", apps: vis }];
         } else {
             var map = {};
             for (var s = 0; s < vis.length; s++) {
@@ -526,6 +642,7 @@ Item {
         target: DashState
         function onAppListChanged() { appsTab.refresh() }
         function onPinnedIdsChanged() { appsTab.refresh() }
+        function onRecentIdsChanged() { appsTab.refresh() }
         function onResetView() {
             appsTab.filter = Plasmoid.configuration.defaultCategory !== ""
                              ? Plasmoid.configuration.defaultCategory : "all";
@@ -765,6 +882,26 @@ Item {
                             return;
                         }
                     }
+                    if (k === Qt.Key_Tab) {
+                        appsTab.cycleCategory(1);
+                        event.accepted = true;
+                        return;
+                    }
+                    if (k === Qt.Key_Backtab) {
+                        appsTab.cycleCategory(-1);
+                        event.accepted = true;
+                        return;
+                    }
+                    if (k === Qt.Key_PageDown) {
+                        appsTab.pageSel(1);
+                        event.accepted = true;
+                        return;
+                    }
+                    if (k === Qt.Key_PageUp) {
+                        appsTab.pageSel(-1);
+                        event.accepted = true;
+                        return;
+                    }
                     if (k === Qt.Key_Down) {
                         appsTab.moveSel("down");
                         event.accepted = true;
@@ -856,14 +993,18 @@ Item {
                         Item { height: 12 }
                         Kirigami.Icon {
                             Layout.alignment: Qt.AlignHCenter
-                            source: appsTab.filter === "pinned" ? "starred" : "edit-find"
+                            source: appsTab.filter === "pinned" ? "starred"
+                                  : appsTab.filter === "recent" ? "document-open-recent"
+                                  : "edit-find"
                             implicitWidth: 42
                             implicitHeight: 42
                             opacity: 0.35
                         }
                         Text {
                             Layout.alignment: Qt.AlignHCenter
-                            text: appsTab.filter === "pinned" ? "Nothing pinned yet" : "No apps found"
+                            text: appsTab.filter === "pinned" ? "Nothing pinned yet"
+                                : appsTab.filter === "recent" ? "Nothing here yet"
+                                : "No apps found"
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
                             color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
@@ -872,6 +1013,8 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             text: appsTab.filter === "pinned"
                                   ? "Open All Apps, hover any app and tap the ☆ to pin it here"
+                                  : appsTab.filter === "recent"
+                                  ? "Apps you launch will show up here"
                                   : "Try a different search term"
                             font.pixelSize: 11
                             color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
@@ -945,6 +1088,7 @@ Item {
                                     model: section.modelData.apps
 
                                     delegate: AppTile {
+                                        tab: appsTab
                                         tileW: section.gridTileWidth
                                     }
                                 }
@@ -1616,1318 +1760,57 @@ Item {
             }
 
             // ---------- detailed system info ----------
-            ColumnLayout {
+            SystemDetails {
                 anchors.fill: parent
-                visible: appsTab.detailedInfo
-                opacity: appsTab.detailedInfo ? 1 : 0
-                Behavior on opacity {
-                    NumberAnimation { duration: 160 }
-                }
-                spacing: Kirigami.Units.gridUnit * 0.4
-
-                // header
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    PC3.ToolButton {
-                        icon.name: "go-previous"
-                        display: QQC2.AbstractButton.IconOnly
-                        onClicked: appsTab.detailedInfo = false
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 0
-                        Text {
-                            text: "System Info"
-                            font.pixelSize: 14
-                            font.weight: Font.DemiBold
-                            color: Kirigami.Theme.textColor
-                        }
-                        Text {
-                            text: {
-                                var si = DashState.sysInfo;
-                                return (si.HOST ? si.HOST : "localhost") + (si.OS ? " · " + si.OS : "");
-                            }
-                            font.pixelSize: 9
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                        }
-                    }
-                }
-
-                component SectionLabel: Text {
-                    property string text2
-                    text: text2
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 1.2
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-                }
-
-                component InfoRow: RowLayout {
-                    property string lbl
-                    property string val
-                    Layout.fillWidth: true
-                    spacing: 8
-                    Text {
-                        text: parent.lbl
-                        font.pixelSize: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                    }
-                    Item { Layout.fillWidth: true }
-                    Text {
-                        text: parent.val
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.88)
-                        elide: Text.ElideRight
-                        Layout.maximumWidth: 128
-                    }
-                }
-
-                component BarRow: ColumnLayout {
-                    id: barRow
-                    property string lbl
-                    property string val
-                    property real pct: 0
-                    property bool invertWarning: false
-                    Layout.fillWidth: true
-                    spacing: 4
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Text {
-                            text: barRow.lbl
-                            font.pixelSize: 10
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
-                        }
-                        Item { Layout.fillWidth: true }
-                        Text {
-                            text: barRow.val
-                            font.pixelSize: 10
-                            font.weight: Font.DemiBold
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                        }
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 5
-                        radius: 2.5
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.1)
-                        Rectangle {
-                            width: Math.max(0.02, Math.min(1, barRow.pct)) * parent.width
-                            height: parent.height
-                            radius: 2.5
-                            readonly property real effPct: barRow.invertWarning ? 1 - barRow.pct : barRow.pct
-                            color: effPct > 0.9 ? Kirigami.Theme.negativeTextColor
-                                 : effPct > 0.72 ? Kirigami.Theme.neutralTextColor
-                                 : appsTab.accent
-                            Behavior on width {
-                                NumberAnimation { duration: 400; easing.type: Easing.OutCubic }
-                            }
-                        }
-                    }
-                }
-
-                Flickable {
-                    id: infoScroll
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.rightMargin: -20
-                    clip: true
-                    contentWidth: width
-                    contentHeight: infoCol.height
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    QQC2.ScrollBar.vertical: PC3.ScrollBar { }
-
-                    ColumnLayout {
-                        id: infoCol
-                        width: infoScroll.width - 26
-                        spacing: 12
-
-                        readonly property var si: DashState.sysInfo
-                        readonly property var sy: DashState.sys
-
-                        // ----- device section -----
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            SectionLabel { text2: "DEVICE"; Layout.fillWidth: true }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                radius: 12
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                                border.width: 1
-                                border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                                implicitHeight: devRows.height + 20
-
-                                ColumnLayout {
-                                    id: devRows
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.top: parent.top
-                                    anchors.margins: 10
-                                    spacing: 8
-
-                                    InfoRow { Layout.fillWidth: true; lbl: "User";         val: infoCol.si.USER ? infoCol.si.USER : "—" }
-                                    InfoRow { Layout.fillWidth: true; lbl: "Hostname";     val: infoCol.si.HOST ? infoCol.si.HOST : "—" }
-                                    InfoRow { Layout.fillWidth: true; lbl: "OS";           val: infoCol.si.OS ? infoCol.si.OS : "—" }
-                                    InfoRow { Layout.fillWidth: true; lbl: "Kernel";       val: infoCol.si.KERNEL ? infoCol.si.KERNEL : "—" }
-                                    InfoRow { Layout.fillWidth: true; lbl: "Desktop";      val: infoCol.si.PLASMA ? "Plasma " + infoCol.si.PLASMA : "Plasma" }
-                                    InfoRow { Layout.fillWidth: true; lbl: "Architecture"; val: infoCol.si.ARCH ? infoCol.si.ARCH : "—" }
-                                }
-                            }
-                        }
-
-                        // ----- resources section -----
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            SectionLabel { text2: "RESOURCES"; Layout.fillWidth: true }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                radius: 12
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                                border.width: 1
-                                border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                                implicitHeight: resRows.height + 20
-
-                                ColumnLayout {
-                                    id: resRows
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.top: parent.top
-                                    anchors.margins: 10
-                                    spacing: 10
-
-                                    BarRow {
-                                        Layout.fillWidth: true
-                                        lbl: "CPU"
-                                        val: Math.round(infoCol.sy.cpu * 100) + "%"
-                                             + (infoCol.sy.cpuTemp > 0 ? " · " + Math.round(infoCol.sy.cpuTemp) + "°C" : "")
-                                        pct: infoCol.sy.cpu
-                                    }
-
-                                    Repeater {
-                                        model: infoCol.sy.gpus ? infoCol.sy.gpus : []
-
-                                        delegate: BarRow {
-                                            required property int index
-                                            required property var modelData
-                                            Layout.fillWidth: true
-                                            visible: modelData.busy >= 0 || modelData.temp > 0
-                                            lbl: "GPU · " + modelData.name
-                                            val: (modelData.busy >= 0 ? Math.round(modelData.busy * 100) + "%" : "—")
-                                                 + (modelData.temp > 0 ? " · " + Math.round(modelData.temp) + "°C" : "")
-                                            pct: modelData.busy >= 0 ? modelData.busy : 0
-                                        }
-                                    }
-
-                                    BarRow {
-                                        Layout.fillWidth: true
-                                        lbl: "Memory"
-                                        val: Utils.fmtSize(infoCol.sy.memUsed) + " / " + Utils.fmtSize(infoCol.sy.memTotal)
-                                        pct: infoCol.sy.mem
-                                    }
-                                    BarRow {
-                                        Layout.fillWidth: true
-                                        visible: infoCol.sy.swapTotal > 0
-                                        lbl: "Swap"
-                                        val: Utils.fmtSize(infoCol.sy.swapTotal * infoCol.sy.swap) + " / " + Utils.fmtSize(infoCol.sy.swapTotal)
-                                        pct: infoCol.sy.swap
-                                    }
-                                    BarRow {
-                                        Layout.fillWidth: true
-                                        lbl: "Disk"
-                                        val: Utils.fmtSize(infoCol.sy.diskUsed) + " / " + Utils.fmtSize(infoCol.sy.diskTotal)
-                                        pct: infoCol.sy.disk
-                                    }
-                                    BarRow {
-                                        Layout.fillWidth: true
-                                        visible: infoCol.sy.battery >= 0
-                                        lbl: "Battery"
-                                        val: infoCol.sy.battery + "%"
-                                        pct: infoCol.sy.battery / 100
-                                        invertWarning: true
-                                    }
-                                    InfoRow { Layout.fillWidth: true; lbl: "Uptime"; val: Utils.fmtUptime(infoCol.sy.uptime) }
-                                }
-                            }
-                        }
-
-                        // ----- processor footer -----
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            SectionLabel { text2: "PROCESSOR"; Layout.fillWidth: true }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                radius: 12
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                                border.width: 1
-                                border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                                implicitHeight: cpuCol.height + 20
-
-                                ColumnLayout {
-                                    id: cpuCol
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.top: parent.top
-                                    anchors.margins: 10
-                                    spacing: 3
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: infoCol.si.CPU ? infoCol.si.CPU : "—"
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                                        wrapMode: Text.WordWrap
-                                    }
-                                    Text {
-                                        text: infoCol.si.CORES ? infoCol.si.CORES + " cores" : ""
-                                        font.pixelSize: 10
-                                        color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                                    }
-                                }
-                            }
-                        }
-
-                        // ----- graphics section -----
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            SectionLabel { text2: "GRAPHICS"; Layout.fillWidth: true }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                radius: 12
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                                border.width: 1
-                                border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                                implicitHeight: gpuRows.height + 20
-
-                                ColumnLayout {
-                                    id: gpuRows
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.top: parent.top
-                                    anchors.margins: 10
-                                    spacing: 8
-
-                                    Repeater {
-                                        model: infoCol.si.GPUS ? infoCol.si.GPUS : []
-
-                                        delegate: Text {
-                                            required property int index
-                                            required property var modelData
-                                            Layout.fillWidth: true
-                                            text: modelData
-                                            font.pixelSize: 11
-                                            font.weight: Font.DemiBold
-                                            color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                                            wrapMode: Text.WordWrap
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                tab: appsTab
             }
 
             // ---------- phone panel (KDE Connect) ----------
-            ColumnLayout {
+            PhonePanel {
                 anchors.fill: parent
-                visible: appsTab.phoneMode
-                opacity: appsTab.phoneMode ? 1 : 0
+                tab: appsTab
+            }
+
+
+            // toast feedback (overlay child of the sidebar, not of the
+            // ColumnLayout — anchoring inside a layout is a warning)
+            Rectangle {
+                id: phoneToast
+                property bool shown: appsTab.phoneMode && appsTab._phoneToast !== ""
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 8
+                width: Math.min(parent.width - 24, toastText.implicitWidth + 30)
+                height: 30
+                radius: 15
+                color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.95)
+                border.width: 1
+                border.color: Qt.alpha(appsTab.accent, 0.45)
+                opacity: shown ? 1 : 0
                 Behavior on opacity {
-                    NumberAnimation { duration: 160 }
+                    NumberAnimation { duration: 180 }
                 }
-                spacing: Kirigami.Units.gridUnit * 0.4
+                z: 10
 
-                // re-run the device search a moment after --refresh
-                Timer {
-                    id: phoneRefreshTimer
-                    interval: 2500
-                    onTriggered: DashState.refreshPhone()
-                }
-
-                // header
                 RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
+                    anchors.centerIn: parent
+                    spacing: 6
 
-                    PC3.ToolButton {
-                        icon.name: "go-previous"
-                        display: QQC2.AbstractButton.IconOnly
-                        onClicked: {
-                            appsTab.phoneMode = false;
-                            appsTab.notifOpen = false;
-                            appsTab.touchpadOn = false;
-                            DashState.closePhonePoll();
-                            DashState.closePhoneNotifs();
-                        }
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 0
-                        Text {
-                            text: "My Phone"
-                            font.pixelSize: 14
-                            font.weight: Font.DemiBold
-                            color: Kirigami.Theme.textColor
-                        }
-                        Text {
-                            text: {
-                                var d = appsTab.phoneDev;
-                                if (!d) { return "KDE Connect"; }
-                                return d.name + (d.reachable ? " · Connected" : " · Offline");
-                            }
-                            font.pixelSize: 9
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                        }
-                    }
-                    // battery chip
-                    Rectangle {
-                        visible: appsTab.phoneDev !== null && DashState.phoneBattery >= 0
-                        Layout.alignment: Qt.AlignVCenter
-                        implicitWidth: phoneBatChip.implicitWidth + 14
-                        implicitHeight: 22
-                        radius: 11
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.06)
-                        border.width: 1
-                        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-
-                        RowLayout {
-                            id: phoneBatChip
-                            anchors.centerIn: parent
-                            spacing: 4
-
-                            Kirigami.Icon {
-                                source: {
-                                    if (DashState.phoneCharging) { return "battery-good-charging"; }
-                                    var b = DashState.phoneBattery;
-                                    return b > 80 ? "battery-full"
-                                         : b > 50 ? "battery-good"
-                                         : b > 20 ? "battery-low"
-                                         : "battery-caution";
-                                }
-                                implicitWidth: 12
-                                implicitHeight: 12
-                            }
-                            Text {
-                                text: DashState.phoneBattery + "%"
-                                font.pixelSize: 10
-                                font.weight: Font.DemiBold
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                            }
-                        }
-                    }
                     Kirigami.Icon {
-                        source: "kdeconnect"
-                        implicitWidth: 16
-                        implicitHeight: 16
-                        opacity: 0.55
+                        source: appsTab._phoneToastIcon !== ""
+                                ? appsTab._phoneToastIcon : "dialog-information"
+                        isMask: true
+                        implicitWidth: 13
+                        implicitHeight: 13
+                        color: appsTab.accent
+                        visible: appsTab._phoneToastIcon !== ""
                     }
-                }
-
-                Flickable {
-                    id: phoneScroll
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.rightMargin: -20
-                    clip: true
-                    contentWidth: width
-                    contentHeight: phoneBody.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    QQC2.ScrollBar.vertical: PC3.ScrollBar { }
-
-                    ColumnLayout {
-                        id: phoneBody
-                        width: phoneScroll.width - 26
-                        spacing: Kirigami.Units.gridUnit * 0.4
-
-                component PhoneLabel: Text {
-                    property string text2
-                    text: text2
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 1.2
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-                }
-
-                component PhoneSection: Item {
-                    id: psec
-                    // .data (not .children) so non-visual children (Timer,
-                    // Repeater) are accepted too
-                    default property alias content: psecCol.data
-                    property bool open: false
-                    visible: height > 0
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: open ? psecCol.implicitHeight : 0
-                    Behavior on Layout.preferredHeight {
-                        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-                    }
-                    opacity: open ? 1 : 0
-                    Behavior on opacity {
-                        NumberAnimation { duration: 160 }
-                    }
-                    clip: true
-
-                    ColumnLayout {
-                        id: psecCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        spacing: 8
-                    }
-                }
-
-                component PhoneAction: Rectangle {
-                    id: pa
-                    property string lbl
-                    property string icn
-                    property bool sel: false
-                    signal triggered()
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 56
-                    radius: 12
-                    color: paHv.hovered
-                           ? Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                           : pa.sel
-                           ? Qt.alpha(appsTab.accent, 0.15)
-                           : Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                    border.width: 1
-                    border.color: pa.sel ? Qt.alpha(appsTab.accent, 0.5)
-                                         : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                    opacity: enabled ? 1 : 0.4
-                    Behavior on color {
-                        ColorAnimation { duration: 130 }
-                    }
-                    Behavior on opacity {
-                        NumberAnimation { duration: 130 }
-                    }
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: 5
-
-                        Kirigami.Icon {
-                            source: pa.icn
-                            isMask: true
-                            implicitWidth: 17
-                            implicitHeight: 17
-                            color: pa.enabled
-                                   ? Qt.alpha(Kirigami.Theme.textColor, 0.8)
-                                   : Qt.alpha(Kirigami.Theme.textColor, 0.35)
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        Text {
-                            text: pa.lbl
-                            font.pixelSize: 9
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                    }
-
-                    HoverHandler {
-                        id: paHv
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: pa.enabled
-                    }
-                    TapHandler {
-                        enabled: pa.enabled
-                        onTapped: pa.triggered()
-                    }
-                }
-
-                // device + battery card
-                Rectangle {
-                    visible: appsTab.phoneDev !== null
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 86
-                    radius: 14
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                    border.width: 1
-                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 10
-
-                        Item {
-                            Layout.preferredWidth: 42
-                            Layout.preferredHeight: 42
-                            Layout.alignment: Qt.AlignVCenter
-
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 11
-                                color: Qt.alpha(appsTab.accent, 0.15)
-                                border.width: 1
-                                border.color: Qt.alpha(appsTab.accent, 0.4)
-                            }
-                            Kirigami.Icon {
-                                anchors.centerIn: parent
-                                source: "smartphone"
-                                isMask: true
-                                color: appsTab.accent
-                                implicitWidth: 20
-                                implicitHeight: 20
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 5
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: appsTab.phoneDev ? appsTab.phoneDev.name : "—"
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideRight
-                                color: Kirigami.Theme.textColor
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                Kirigami.Icon {
-                                    source: {
-                                        if (DashState.phoneBattery < 0) { return "battery-missing"; }
-                                        if (DashState.phoneCharging) { return "battery-good-charging"; }
-                                        var b = DashState.phoneBattery;
-                                        return b > 80 ? "battery-full"
-                                             : b > 50 ? "battery-good"
-                                             : b > 20 ? "battery-low"
-                                             : "battery-caution";
-                                    }
-                                    implicitWidth: 14
-                                    implicitHeight: 14
-                                }
-                                Text {
-                                    text: DashState.phoneBattery >= 0
-                                          ? DashState.phoneBattery + "%" : "—"
-                                    font.pixelSize: 11
-                                    font.weight: Font.DemiBold
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                                }
-                                Text {
-                                    visible: DashState.phoneSignal >= 0 && DashState.phoneNetType !== ""
-                                    text: "· " + DashState.phoneNetType
-                                    font.pixelSize: 10
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                                }
-                                Text {
-                                    visible: DashState.phoneCharging
-                                    text: "· charging"
-                                    font.pixelSize: 10
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                                }
-                                Item { Layout.fillWidth: true }
-                                Kirigami.Icon {
-                                    visible: appsTab.phoneDev && appsTab.phoneDev.reachable
-                                    source: "network-wireless-connected"
-                                    implicitWidth: 12
-                                    implicitHeight: 12
-                                    opacity: 0.55
-                                }
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                height: 4
-                                radius: 2
-                                visible: DashState.phoneBattery >= 0
-                                color: Qt.alpha(Kirigami.Theme.textColor, 0.1)
-
-                                Rectangle {
-                                    anchors.left: parent.left
-                                    anchors.top: parent.top
-                                    anchors.bottom: parent.bottom
-                                    width: parent.width * Math.max(0, Math.min(1, DashState.phoneBattery / 100))
-                                    radius: 2
-                                    color: DashState.phoneCharging ? "#4fc3f7"
-                                         : (DashState.phoneBattery >= 0 && DashState.phoneBattery <= 20
-                                            ? Kirigami.Theme.negativeTextColor : appsTab.accent)
-                                    Behavior on width {
-                                        NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                PhoneLabel { text2: "ACTIONS" }
-
-                // actions
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Repeater {
-                        model: [
-                            { lbl: "Ring",    icn: "bell",                             act: "ring"     },
-                            { lbl: "Ping",    icn: "preferences-desktop-notification", act: "ping"     },
-                            { lbl: "Control", icn: "input-mouse",                      act: "touchpad" },
-                            { lbl: "Notifs",  icn: "dialog-information",               act: "notifs"   }
-                        ]
-
-                        delegate: PhoneAction {
-                            required property var modelData
-                            lbl: modelData.lbl
-                            icn: modelData.icn
-                            enabled: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-                            sel: (modelData.act === "touchpad" && appsTab.touchpadOn)
-                              || (modelData.act === "notifs" && appsTab.notifOpen)
-                            onTriggered: {
-                                if (modelData.act === "touchpad") {
-                                    appsTab.touchpadOn = !appsTab.touchpadOn;
-                                } else if (modelData.act === "notifs") {
-                                    appsTab.notifOpen = !appsTab.notifOpen;
-                                    if (appsTab.notifOpen) { DashState.fetchPhoneNotifs(); }
-                                } else {
-                                    DashState.phoneAction(modelData.act);
-                                    if (modelData.act === "ring") {
-                                        appsTab.showPhoneToast("Ringing your phone…", "bell");
-                                    } else if (modelData.act === "ping") {
-                                        appsTab.showPhoneToast("Ping sent", "preferences-desktop-notification");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                PhoneLabel {
-                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-                    text2: "SEND TO PHONE"
-                }
-
-                // second row: send / share actions
-                RowLayout {
-                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Repeater {
-                        model: [
-                            { lbl: "File",     icn: "document-send", act: "file"      },
-                            { lbl: "Clipboard",icn: "edit-copy",     act: "clipboard" },
-                            { lbl: "Browse",   icn: "folder-remote", act: "browse"    },
-                            { lbl: "Commands", icn: "system-run",    act: "commands"  }
-                        ]
-
-                        delegate: PhoneAction {
-                            required property var modelData
-                            lbl: modelData.lbl
-                            icn: modelData.icn
-                            onTriggered: {
-                                if (modelData.act === "file") {
-                                    DashState.phoneAction("sharefile");
-                                } else if (modelData.act === "commands") {
-                                    DashState.phoneAction("notifycommands");
-                                    appsTab.showPhoneToast("Fetching phone commands…", "system-run");
-                                } else {
-                                    DashState.phoneAction(modelData.act);
-                                    if (modelData.act === "clipboard") {
-                                        appsTab.showPhoneToast("Clipboard sent to phone", "edit-copy");
-                                    } else if (modelData.act === "browse") {
-                                        appsTab.showPhoneToast("Mounting phone storage…", "folder-remote");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // virtual touchpad (mouse control)
-                PhoneSection {
-                    open: appsTab.touchpadOn
-                          && appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-
-                    Rectangle {
-                        id: touchpad
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 120
-                        radius: 14
-                        color: touchDrag.containsMouse
-                               ? Qt.alpha(Kirigami.Theme.textColor, 0.06)
-                               : Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                        border.width: 1
-                        border.color: touchDrag.pressed
-                                      ? Qt.alpha(appsTab.accent, 0.5)
-                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                        Behavior on border.color {
-                            ColorAnimation { duration: 130 }
-                        }
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: touchDrag.pressed ? "controlling…" : "drag to move · tap to click · scroll to scroll"
-                            font.pixelSize: 10
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-                        }
-
-                        MouseArea {
-                            id: touchDrag
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.BlankCursor
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                            property real accX: 0
-                            property real accY: 0
-                            property point last: Qt.point(0, 0)
-
-                            onPressed: (mouse) => {
-                                last = Qt.point(mouse.x, mouse.y);
-                                accX = 0;
-                                accY = 0;
-                                cursorTimer.restart();
-                            }
-                            onPositionChanged: (mouse) => {
-                                accX += mouse.x - last.x;
-                                accY += mouse.y - last.y;
-                                last = Qt.point(mouse.x, mouse.y);
-                            }
-                            onReleased: (mouse) => {
-                                cursorTimer.stop();
-                                if (Math.abs(accX) + Math.abs(accY) < 4) {
-                                    DashState.phoneAction("click", "single");  // tap = left click
-                                } else {
-                                    DashState.phoneAction("cursor", Math.round(accX), Math.round(accY));
-                                }
-                                accX = 0;
-                                accY = 0;
-                            }
-                            onCanceled: cursorTimer.stop()
-                            onWheel: (wheel) => {
-                                var steps = wheel.angleDelta.y / 120;
-                                if (steps === 0) { steps = wheel.angleDelta.y > 0 ? 1 : -1; }
-                                DashState.phoneAction("scroll", Math.round(steps));
-                            }
-                        }
-                    }
-
-                    Timer {
-                        id: cursorTimer
-                        interval: 60
-                        repeat: true
-                        running: false
-                        onTriggered: {
-                            if (Math.abs(touchDrag.accX) + Math.abs(touchDrag.accY) >= 1) {
-                                DashState.phoneAction("cursor",
-                                                      Math.round(touchDrag.accX),
-                                                      Math.round(touchDrag.accY));
-                                touchDrag.accX = 0;
-                                touchDrag.accY = 0;
-                            }
-                        }
-                    }
-
-                    // click buttons
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Repeater {
-                            model: [
-                                { lbl: "Left",   icn: "input-mouse", act: "single" },
-                                { lbl: "Double", icn: "input-mouse", act: "double" },
-                                { lbl: "Right",  icn: "input-mouse", act: "right"  }
-                            ]
-
-                            delegate: PhoneAction {
-                                required property var modelData
-                                lbl: modelData.lbl
-                                icn: modelData.icn
-                                onTriggered: DashState.phoneAction("click", modelData.act)
-                            }
-                        }
-                    }
-                }
-
-                // inputs: send a link + type on the phone
-                ColumnLayout {
-                    visible: appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    // send-a-link input
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 38
-                        radius: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                        border.width: 1
-                        border.color: linkInput.activeFocus
-                                      ? Qt.alpha(appsTab.accent, 0.5)
-                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                        Behavior on border.color {
-                            ColorAnimation { duration: 130 }
-                        }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 6
-                            spacing: 6
-
-                            Kirigami.Icon {
-                                source: "insert-link"
-                                implicitWidth: 14
-                                implicitHeight: 14
-                                opacity: 0.55
-                            }
-                            QQC2.TextField {
-                                id: linkInput
-                                Layout.fillWidth: true
-                                placeholderText: "Paste a link to send…"
-                                font.pixelSize: 11
-                                color: Kirigami.Theme.textColor
-                                background: null
-                                selectByMouse: true
-                                onAccepted: appsTab.sendPhoneLink()
-                            }
-                            PC3.ToolButton {
-                                icon.name: "document-send"
-                                icon.width: 14
-                                icon.height: 14
-                                display: QQC2.AbstractButton.IconOnly
-                                enabled: linkInput.text.length > 0
-                                opacity: enabled ? 1 : 0.35
-                                onClicked: appsTab.sendPhoneLink()
-                                QQC2.ToolTip { text: "Send link to phone"; delay: 300 }
-                            }
-                        }
-                    }
-
-                    // type-on-phone input
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 38
-                        radius: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                        border.width: 1
-                        border.color: typeInput.activeFocus
-                                      ? Qt.alpha(appsTab.accent, 0.5)
-                                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                        Behavior on border.color {
-                            ColorAnimation { duration: 130 }
-                        }
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 6
-                            spacing: 6
-
-                            Kirigami.Icon {
-                                source: "input-keyboard"
-                                implicitWidth: 14
-                                implicitHeight: 14
-                                opacity: 0.55
-                            }
-                            QQC2.TextField {
-                                id: typeInput
-                                Layout.fillWidth: true
-                                placeholderText: "Type on your phone…"
-                                font.pixelSize: 11
-                                color: Kirigami.Theme.textColor
-                                background: null
-                                selectByMouse: true
-                                onAccepted: appsTab.typeOnPhone()
-                            }
-                            PC3.ToolButton {
-                                icon.name: "document-send"
-                                icon.width: 14
-                                icon.height: 14
-                                display: QQC2.AbstractButton.IconOnly
-                                enabled: typeInput.text.length > 0
-                                opacity: enabled ? 1 : 0.35
-                                onClicked: appsTab.typeOnPhone()
-                                QQC2.ToolTip { text: "Type into the phone"; delay: 300 }
-                            }
-                        }
-                    }
-                }
-
-                // phone notifications
-                PhoneSection {
-                    open: appsTab.notifOpen
-                          && appsTab.phoneDev !== null && appsTab.phoneDev.reachable
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        Text {
-                            text: "PHONE NOTIFICATIONS"
-                            font.pixelSize: 9
-                            font.weight: Font.DemiBold
-                            font.letterSpacing: 1.2
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-                        }
-                        Item { Layout.fillWidth: true }
-                        PC3.ToolButton {
-                            icon.name: "view-refresh"
-                            implicitWidth: 22
-                            implicitHeight: 22
-                            display: QQC2.AbstractButton.IconOnly
-                            onClicked: DashState.fetchPhoneNotifs()
-                            QQC2.ToolTip { text: "Refresh"; delay: 300 }
-                        }
-                    }
-
                     Text {
-                        visible: DashState.phoneNotifs.length === 0
-                        text: "No notifications on your phone"
+                        id: toastText
+                        text: appsTab._phoneToast
                         font.pixelSize: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Repeater {
-                        model: DashState.phoneNotifs
-
-                        delegate: Rectangle {
-                            id: notifRow
-                            required property var modelData
-                            Layout.fillWidth: true
-                            implicitHeight: notifCol.implicitHeight + 16
-                            radius: 10
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                            border.width: 1
-                            border.color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-
-                            ColumnLayout {
-                                id: notifCol
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 8
-                                spacing: 2
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: notifRow.modelData.app !== ""
-                                              ? notifRow.modelData.app : "Notification"
-                                        font.pixelSize: 9
-                                        font.weight: Font.DemiBold
-                                        font.letterSpacing: 0.5
-                                        elide: Text.ElideRight
-                                        color: Qt.alpha(appsTab.accent, 0.9)
-                                    }
-                                    Kirigami.Icon {
-                                        visible: notifRow.modelData.dismissable
-                                        source: "window-close"
-                                        isMask: true
-                                        implicitWidth: 12
-                                        implicitHeight: 12
-                                        opacity: notifDismissHover.hovered ? 0.9 : 0.5
-                                        Layout.alignment: Qt.AlignVCenter
-
-                                        HoverHandler { id: notifDismissHover; cursorShape: Qt.PointingHandCursor }
-                                        TapHandler {
-                                            onTapped: {
-                                                DashState.phoneAction("notifdismiss", notifRow.modelData.id);
-                                                appsTab.showPhoneToast("Notification dismissed", "window-close");
-                                                notifDismissTimer.restart();
-                                            }
-                                        }
-                                    }
-                                }
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: notifRow.modelData.title !== ""
-                                          ? notifRow.modelData.title : "—"
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WordWrap
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.8)
-                                }
-                            }
-                        }
-                    }
-
-                    Timer {
-                        id: notifDismissTimer
-                        interval: 900
-                        onTriggered: DashState.fetchPhoneNotifs()
-                    }
-                }
-
-                // phone media card
-                Rectangle {
-                    visible: appsTab.phoneDev !== null
-                             && appsTab.phoneDev.reachable
-                             && DashState.phoneMedia !== null
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 108
-                    radius: 14
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
-                    border.width: 1
-                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-
-                            Item {
-                                Layout.preferredWidth: 40
-                                Layout.preferredHeight: 40
-                                Layout.alignment: Qt.AlignVCenter
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 10
-                                    visible: phoneArt.status !== Image.Ready
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                                    Kirigami.Icon {
-                                        anchors.centerIn: parent
-                                        source: "audio-x-generic"
-                                        isMask: true
-                                        color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
-                                        implicitWidth: 18
-                                        implicitHeight: 18
-                                    }
-                                }
-
-                                Image {
-                                    id: phoneArt
-                                    anchors.fill: parent
-                                    visible: false
-                                    source: DashState.phoneMedia && DashState.phoneMedia.art
-                                            ? DashState.phoneMedia.art : ""
-                                    fillMode: Image.PreserveAspectCrop
-                                    smooth: true
-                                    asynchronous: true
-                                }
-
-                                MultiEffect {
-                                    anchors.fill: parent
-                                    source: phoneArt
-                                    maskEnabled: true
-                                    maskSource: Rectangle {
-                                        width: 40
-                                        height: 40
-                                        radius: 10
-                                        visible: false
-                                    }
-                                    maskThresholdMin: 0.1
-                                    maskSpreadAtMin: 1.0
-                                    visible: phoneArt.status === Image.Ready
-                                }
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Layout.alignment: Qt.AlignVCenter
-                                spacing: 2
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: DashState.phoneMedia && DashState.phoneMedia.title
-                                          ? DashState.phoneMedia.title
-                                          : "Nothing playing on your phone"
-                                    font.pixelSize: 11
-                                    font.weight: Font.DemiBold
-                                    elide: Text.ElideRight
-                                    color: DashState.phoneMedia ? Kirigami.Theme.textColor
-                                         : Qt.alpha(Kirigami.Theme.textColor, 0.45)
-                                }
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: DashState.phoneMedia && DashState.phoneMedia.artist
-                                          ? DashState.phoneMedia.artist : "—"
-                                    font.pixelSize: 10
-                                    elide: Text.ElideRight
-                                    color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                                }
-                            }
-                        }
-
-                        Row {
-                            Layout.alignment: Qt.AlignHCenter
-                            spacing: 14
-
-                            PC3.ToolButton {
-                                anchors.verticalCenter: parent.verticalCenter
-                                icon.name: "media-skip-backward"
-                                icon.width: 15
-                                icon.height: 15
-                                display: QQC2.AbstractButton.IconOnly
-                                onClicked: DashState.phoneAction("prev")
-                            }
-
-                            Item {
-                                width: 34
-                                height: 34
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 17
-                                    color: appsTab.accent
-                                    scale: phonePlayHover.hovered ? 1.1 : 1.0
-                                    Behavior on scale {
-                                        NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
-                                    }
-                                }
-                                HoverHandler { id: phonePlayHover }
-                                Kirigami.Icon {
-                                    anchors.centerIn: parent
-                                    source: DashState.phoneMedia && DashState.phoneMedia.status === "Playing"
-                                            ? "media-playback-pause" : "media-playback-start"
-                                    isMask: true
-                                    color: appsTab.onAccent
-                                    implicitWidth: 15
-                                    implicitHeight: 15
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (DashState.phoneMedia && DashState.phoneMedia.status === "Playing") {
-                                            DashState.phoneAction("pause");
-                                        } else {
-                                            DashState.phoneAction("play");
-                                        }
-                                    }
-                                }
-                            }
-
-                            PC3.ToolButton {
-                                anchors.verticalCenter: parent.verticalCenter
-                                icon.name: "media-skip-forward"
-                                icon.width: 15
-                                icon.height: 15
-                                display: QQC2.AbstractButton.IconOnly
-                                onClicked: DashState.phoneAction("next")
-                            }
-                        }
-                    }
-                }
-
-                // empty state
-                ColumnLayout {
-                    visible: appsTab.phoneDev === null
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: 8
-
-                    Item {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 64
-                        Layout.preferredHeight: 64
-
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: 32
-                            color: Qt.alpha(appsTab.accent, 0.12)
-                            border.width: 1
-                            border.color: Qt.alpha(appsTab.accent, 0.4)
-                        }
-                        Kirigami.Icon {
-                            anchors.centerIn: parent
-                            source: "smartphone"
-                            isMask: true
-                            color: appsTab.accent
-                            implicitWidth: 28
-                            implicitHeight: 28
-                        }
-                    }
-                    Text {
-                        text: "No phone connected"
-                        font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    Text {
-                        text: "Pair a device with KDE Connect, or search again."
-                        font.pixelSize: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    PC3.Button {
-                        text: "Search again"
-                        icon.name: "view-refresh"
-                        Layout.alignment: Qt.AlignHCenter
-                        onClicked: {
-                            DashState.phoneAction("refresh");
-                            phoneRefreshTimer.restart();
-                        }
-                    }
-                }
-                    }
-                }
-
-                // toast feedback
-                Rectangle {
-                    id: phoneToast
-                    property bool shown: appsTab._phoneToast !== ""
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 8
-                    width: Math.min(parent.width - 24, toastText.implicitWidth + 30)
-                    height: 30
-                    radius: 15
-                    color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.95)
-                    border.width: 1
-                    border.color: Qt.alpha(appsTab.accent, 0.45)
-                    opacity: shown ? 1 : 0
-                    Behavior on opacity {
-                        NumberAnimation { duration: 180 }
-                    }
-                    z: 10
-
-                    RowLayout {
-                        anchors.centerIn: parent
-                        spacing: 6
-
-                        Kirigami.Icon {
-                            source: appsTab._phoneToastIcon !== ""
-                                    ? appsTab._phoneToastIcon : "dialog-information"
-                            isMask: true
-                            implicitWidth: 13
-                            implicitHeight: 13
-                            color: appsTab.accent
-                            visible: appsTab._phoneToastIcon !== ""
-                        }
-                        Text {
-                            id: toastText
-                            text: appsTab._phoneToast
-                            font.pixelSize: 10
-                            font.weight: Font.DemiBold
-                            color: Kirigami.Theme.textColor
-                        }
+                        color: Kirigami.Theme.textColor
                     }
                 }
             }
@@ -2980,204 +1863,6 @@ Item {
                     text: "Phone · KDE Connect"
                     delay: 400
                 }
-            }
-        }
-    }
-
-    // ---------------------------------------------------------- app tile
-    component AppTile: Item {
-        id: tile
-        required property var modelData
-        required property int index
-
-        property int tileW: 92
-
-        // drag-to-reorder is active only inside the Pinned tab
-        readonly property bool reorderable:
-            appsTab.filter === "pinned" && appsTab.search === ""
-
-        // selected when the keyboard selector points at this app's id
-        readonly property bool keySel:
-            appsTab.selAppId !== "" && tile.modelData.id === appsTab.selAppId
-
-        // this tile is the one being dragged (it rides to the hovered slot)
-        readonly property bool dragSel:
-            appsTab.pinDragActive && appsTab.pinDragId === tile.modelData.id
-
-        // a tap right after a real drag must not launch the app
-        property bool wasDragged: false
-
-        // the app as a URL — this is what the taskbar's drop handler requires:
-        // Backend::isApplication() only accepts LOCAL FILE urls of desktop
-        // files (url.isLocalFile() + KDesktopFile check), i.e. the exact
-        // payload the KDE launcher hands over on a drag. Our scanned paths
-        // always live in standard application dirs, so KSycoca knows them.
-        readonly property string appUrl:
-            "file://" + encodeURI(tile.modelData.path || "")
-
-        width: tileW
-        height: 100
-
-        // Kickoff-style live shuffle: while a pinned drag is active, every
-        // tile translates to open the slot under the pointer — the dragged
-        // tile rides to the hovered slot and the ones in between slide one
-        // slot toward the source, so the grid seems to flow around the drag
-        transform: Translate {
-            x: appsTab.pinDisplacement(tile.index).x
-            y: appsTab.pinDisplacement(tile.index).y
-
-            Behavior on x {
-                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-            }
-            Behavior on y {
-                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-            }
-        }
-
-        Component.onCompleted: appsTab.registerTile(tile)
-        Component.onDestruction: appsTab.unregisterTile(tile)
-
-        // native system drag (exactly how the KDE launcher's delegates do
-        // it): press + move lifts the app out of the widget with a snapshot
-        // of the tile as the drag image. Drop it on the taskbar to add a
-        // launcher, on the desktop, or on any window — or keep it inside the
-        // widget to reorder the Pinned grid (the content DropArea handles
-        // the shuffle and the undo-on-exit).
-        DragHandler {
-            id: tileDrag
-            target: null
-            onActiveChanged: {
-                if (active) {
-                    tile.wasDragged = true
-                    appsTab.noteTileDrag(tile)
-                    tile.grabToImage(function(result) {
-                        tile.Drag.imageSource = result.url
-                        tile.Drag.active = true
-                    })
-                } else {
-                    tile.Drag.active = false
-                    // clear immediately: a tap cancelled by this drag must
-                    // never swallow the NEXT click's launch
-                    tile.wasDragged = false
-                    appsTab.endTileDrag()
-                }
-            }
-        }
-        Drag.dragType: Drag.Automatic
-        Drag.supportedActions: Qt.CopyAction
-        Drag.proposedAction: Qt.CopyAction
-        Drag.hotSpot.x: width / 2
-        Drag.hotSpot.y: height / 2
-        Drag.mimeData: { "text/uri-list": [tile.appUrl] }
-
-        // input handlers are declared before everything that binds to them,
-        // so first-time binding evaluation never sees an undefined id
-        HoverHandler {
-            id: tileHover
-            cursorShape: Qt.PointingHandCursor
-        }
-
-        TapHandler {
-            id: tileTap
-            onTapped: {
-                if (!tile.wasDragged) {
-                    DashState.launch(tile.modelData.path, tile.modelData.id)
-                }
-                tile.wasDragged = false
-            }
-        }
-
-        // keyboard-selector halo / dragged-tile highlight
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 1
-            radius: 15
-            opacity: (tile.keySel || tile.dragSel) ? 1 : 0
-            color: Qt.alpha(appsTab.accent, 0.10)
-            Behavior on opacity {
-                NumberAnimation { duration: 110 }
-            }
-        }
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 3
-            radius: 14
-            color: (tile.keySel || tile.dragSel)
-                   ? Qt.alpha(appsTab.accent, 0.14)
-                   : Qt.alpha(Kirigami.Theme.textColor, tileHover.hovered ? 0.08 : 0)
-            border.width: (tile.keySel || tile.dragSel) ? 1.5 : 0
-            border.color: appsTab.accent
-            scale: tileTap.pressed ? 0.94 : 1.0
-            Behavior on color {
-                ColorAnimation { duration: 120 }
-            }
-            Behavior on border.width {
-                NumberAnimation { duration: 100 }
-            }
-            Behavior on scale {
-                NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
-            }
-        }
-
-        Column {
-            width: parent.width - 10
-            anchors.centerIn: parent
-            spacing: 7
-
-            Kirigami.Icon {
-                anchors.horizontalCenter: parent.horizontalCenter
-                source: tile.modelData.icon
-                implicitWidth: 47
-                implicitHeight: 47
-            }
-
-            Text {
-                width: parent.width
-                height: 30
-                text: tile.modelData.name
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignTop
-                elide: Text.ElideRight
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
-                font.pixelSize: 11
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-            }
-        }
-
-        // pin toggle (the star stays clickable everywhere on the tile)
-        Item {
-            width: 24
-            height: 24
-            z: 101
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.margins: 4
-            visible: tileHover.hovered || tile.modelData.pinned
-            opacity: tile.modelData.pinned ? 1.0 : (tileHover.hovered ? 0.7 : 0)
-            Behavior on opacity {
-                NumberAnimation { duration: 120 }
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: 12
-                color: pinArea.containsMouse ? Qt.alpha(appsTab.accent, 0.18) : "transparent"
-            }
-            Kirigami.Icon {
-                anchors.fill: parent
-                anchors.margins: 5
-                source: tile.modelData.pinned ? "starred" : "non-starred"
-                isMask: true
-                color: tile.modelData.pinned ? appsTab.accent : Qt.alpha(Kirigami.Theme.textColor, 0.7)
-            }
-            MouseArea {
-                id: pinArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: DashState.togglePin(tile.modelData.id)
             }
         }
     }

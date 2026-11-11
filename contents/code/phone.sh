@@ -38,7 +38,16 @@ device_list() {
         name=${rest%%: *}
         [ -n "$name" ] || continue
         tail=${rest#*: }
-        id=${tail%% on*}
+        # kdeconnect-cli prints the id followed by a variable status suffix:
+        #   "<id>"                                    (unpaired/edge cases)
+        #   "<id> (paired)"                           (paired, offline)
+        #   "<id> on 192.168.1.2 via LAN (paired and reachable)"
+        # The id is always the FIRST whitespace-delimited token, so cut
+        # everything from the first space. The old "${tail%% on*}" only
+        # handled the reachable form — the offline form kept its " (paired)"
+        # suffix, making every DBus path built from it invalid (battery and
+        # connectivity read -1, and every action failed silently).
+        id=${tail%% *}
         st=$(printf '%s' "$tail" | sed -n 's/^.*(\(.*\))$/\1/p')
         r=0
         case "$st" in

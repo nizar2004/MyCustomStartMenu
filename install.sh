@@ -28,6 +28,10 @@ Installs the Custom Start Menu Plasma widget for the current user.
   curl -fsSL ${REPO_URL#https://}/...      (see README)  install from GitHub
   ./install.sh              install and restart plasmashell
   ./install.sh --no-restart install without restarting the shell
+
+Phone mirroring (scrcpy + adb) is installed automatically when missing; the
+script asks for your sudo password up front for those system packages, then
+installs the widget itself per-user (no root).
 EOF
 }
 
@@ -38,6 +42,53 @@ for arg in "$@"; do
         *) echo "install.sh: unknown option: $arg" >&2; exit 2 ;;
     esac
 done
+
+# --- optional dependencies: phone mirroring (scrcpy over Wi-Fi) ----------------
+# scrcpy mirrors the phone on the desktop; adb + udev rules let it talk to the
+# device. These are system packages, so the sudo password is asked for once,
+# up front — and only when something is actually missing. Everything here is
+# best-effort: if it fails, the widget still installs (mirroring just stays
+# unavailable until the packages are present).
+install_phone_deps() {
+    local missing=()
+    command -v adb    >/dev/null 2>&1 || missing+=(adb)
+    command -v scrcpy >/dev/null 2>&1 || missing+=(scrcpy)
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    echo
+    echo "Phone mirroring needs: ${missing[*]} (plus Android udev rules)."
+    echo "Installing them requires sudo — you may be asked for your password now."
+    if ! sudo -v; then
+        echo "install.sh: sudo was not granted — skipping ${missing[*]}." >&2
+        echo "            The widget installs fine; 'mirror phone' stays disabled." >&2
+        return 0
+    fi
+
+    local rc=0
+    if command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --needed --noconfirm scrcpy android-tools android-udev || rc=1
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update -qq || true
+        sudo apt-get install -y scrcpy adb android-sdk-platform-tools-common || rc=1
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y scrcpy android-tools || rc=1
+    elif command -v zypper >/dev/null 2>&1; then
+        sudo zypper --non-interactive install scrcpy android-tools || rc=1
+    else
+        echo "install.sh: no known package manager — install 'scrcpy' and 'adb' yourself." >&2
+        rc=1
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        echo "install.sh: could not install the phone packages; continuing anyway." >&2
+    fi
+    return 0
+}
+
+install_phone_deps
 
 # --- locate the widget sources ------------------------------------------------
 # Local run: the script sits next to metadata.json + contents.

@@ -123,6 +123,12 @@ Item {
                 to: 5000
                 stepSize: 250
                 implicitWidth: 170
+                // load the stored rate and write it back on release/drag —
+                // previously the slider was fully detached from
+                // cfg_refreshInterval, so the setting never saved (and always
+                // displayed the default 0.50 s instead of the real 1.50 s).
+                value: cfg_refreshInterval
+                onMoved: cfg_refreshInterval = Math.round(value)
             }
             Text {
                 text: (refreshSlider.value / 1000).toFixed(2) + " s"

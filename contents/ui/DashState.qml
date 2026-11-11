@@ -51,8 +51,10 @@ QtObject {
     property int phoneSignal: -1             // cellular strength 0-4, -1 unknown
     property string phoneNetType: ""         // "LTE", "5G", …
     property var phoneNotifs: []             // [{id, app, title, dismissable}]
+    property var phoneCommands: []           // [{id, name}] registered on the phone
     property string _phoneSrc: ""            // connected poll source name
     property string _phoneNotifSrc: ""       // one-shot notifications source
+    property string _phoneCmdSrc: ""         // one-shot commands source
     property int _phoneEpoch: 0              // invalidates deferred poll changes
 
     readonly property url phoneUrl: Qt.resolvedUrl("../code/phone.sh")
@@ -69,7 +71,7 @@ QtObject {
             closePhonePoll();
             var src = "sh " + shUrl(phoneUrl) + " poll " + sh(phoneId);
             _phoneSrc = src;
-            run.connectSource(src);
+            phoneRun.connectSource(src);
         });
     }
 
@@ -77,7 +79,7 @@ QtObject {
     function closePhonePoll() {
         _phoneEpoch++;                           // cancel any deferred refresh
         if (_phoneSrc !== "") {
-            run.disconnectSource(_phoneSrc);
+            phoneRun.disconnectSource(_phoneSrc);
             _phoneSrc = "";
         }
     }
@@ -167,6 +169,88 @@ QtObject {
             run.disconnectSource(_phoneNotifSrc);
             _phoneNotifSrc = "";
         }
+    }
+
+    // pick a different paired device from the panel header
+    function selectPhone(id) {
+        if (id === undefined || id === null || String(id) === "" || id === phoneId) {
+            return;
+        }
+        phoneId = String(id);
+        closePhoneCommands();
+        refreshPhone();
+    }
+
+    // fetch the phone's registered "Run commands" entries (one-shot)
+    function fetchPhoneCommands() {
+        closePhoneCommands();
+        if (phoneId === "") { return; }
+        _phoneCmdSrc = "sh " + shUrl(phoneUrl) + " commands " + sh(phoneId);
+        run.connectSource(_phoneCmdSrc);
+    }
+
+    function closePhoneCommands() {
+        if (_phoneCmdSrc !== "") {
+            run.disconnectSource(_phoneCmdSrc);
+            _phoneCmdSrc = "";
+        }
+    }
+
+    function parsePhoneCommands(text) {
+        var out = [];
+        var lines = String(text).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            var l = lines[i].replace(/^\s+|\s+$/g, "");
+            if (l === "") { continue; }
+            l = l.replace(/^-\s*/, "");       // "- <id>: <name>"
+            var idx = l.indexOf(": ");
+            if (idx > 0) {
+                out.push({ id: l.slice(0, idx), name: l.slice(idx + 2) });
+            } else {
+                out.push({ id: l, name: l });
+            }
+        }
+        phoneCommands = out;
+        if (_phoneCmdSrc !== "") {
+            run.disconnectSource(_phoneCmdSrc);   // one-shot, like the app scan
+            _phoneCmdSrc = "";
+        }
+    }
+
+    // launch the KDE Connect settings app (pairing / enabling plugins)
+    function openKdeConnect() {
+        runOnce("kdeconnect-app");
+    }
+
+    // ------------------------------------------------------------------
+    // Phone mirroring (scrcpy over Wi-Fi)
+    // ------------------------------------------------------------------
+    readonly property url scrcpyUrl: Qt.resolvedUrl("../code/scrcpy.sh")
+    readonly property string scrcpyCmd: "sh " + shUrl(scrcpyUrl)
+    readonly property string scrcpyStatusCmd: scrcpyCmd + " status"
+    property bool mirroring: false
+
+    function mirrorStart() {
+        mirroring = true;                 // optimistic; the timer resyncs
+        runOnce(scrcpyCmd + " start");
+        mirrorCheckTimer.restart();
+    }
+
+    function mirrorStop() {
+        mirroring = false;
+        runOnce(scrcpyCmd + " stop");
+        mirrorCheckTimer.restart();
+    }
+
+    // ask the helper whether a mirror is actually up (one-shot)
+    function refreshMirrorState() {
+        runOnce(scrcpyStatusCmd);
+    }
+
+    // QtObject has no default property, so the timer must be a property
+    readonly property Timer mirrorCheckTimer: Timer {
+        interval: 2500
+        onTriggered: state.refreshMirrorState()
     }
 
     function parsePhoneNotifs(text) {
@@ -302,12 +386,12 @@ QtObject {
         onNewData: (sourceName, data) => {
             var out = data && data["stdout"] !== undefined ? String(data["stdout"]) : "";
             var base = String(sourceName).split(" #")[0];
-            if (state._phoneSrc !== "" && base === state._phoneSrc) {
-                state.parsePhone(out);           // keep connected: phone poll
-                return;
-            }
             if (state._phoneNotifSrc !== "" && base === state._phoneNotifSrc) {
                 state.parsePhoneNotifs(out);     // one-shot: parsed, then closed
+                return;
+            }
+            if (state._phoneCmdSrc !== "" && base === state._phoneCmdSrc) {
+                state.parsePhoneCommands(out);   // one-shot: parsed, then closed
                 return;
             }
             if (base === state.sysCmd) {
@@ -329,6 +413,11 @@ QtObject {
                 disconnectSource(sourceName);
                 return;
             }
+            if (base === state.scrcpyStatusCmd) {
+                state.mirroring = String(out).replace(/\s+$/, "") === "running";
+                disconnectSource(sourceName);
+                return;
+            }
             if (base === state.infoCmd) {
                 state.parseSysInfo(out);
                 disconnectSource(sourceName);
@@ -340,6 +429,25 @@ QtObject {
                 return;
             }
             disconnectSource(sourceName);        // fire & forget (launch, pin…)
+        }
+    }
+
+    // The phone poll gets its OWN data source. phone.sh's poll takes ~2 s
+    // (kdeconnect-cli plus several busctl/qdbus round-trips) — longer than
+    // the system poll's 1.5 s tick. Sharing `run` made the executable engine
+    // refuse the overlap ("Process … already running") on nearly every tick,
+    // so the phone panel effectively starved. A separate source with a 5 s
+    // interval keeps the poll self-consistent while `run` keeps its
+    // user-configured (fast) rate for sysmon.
+    readonly property P5Support.DataSource phoneRun: P5Support.DataSource {
+        engine: "executable"
+        interval: 5000
+        onNewData: (sourceName, data) => {
+            var out = data && data["stdout"] !== undefined ? String(data["stdout"]) : "";
+            var base = String(sourceName).split(" #")[0];
+            if (state._phoneSrc !== "" && base === state._phoneSrc) {
+                state.parsePhone(out);           // keep connected: phone poll
+            }
         }
     }
 
@@ -400,6 +508,11 @@ QtObject {
         }
         recentIds = next;
         runOnce("sh " + shUrl(recentUrl) + " add " + sh(id));
+    }
+
+    function clearRecent() {
+        recentIds = [];
+        runOnce("sh " + shUrl(recentUrl) + " clear");
     }
 
     function readSysInfo() {
@@ -610,6 +723,22 @@ QtObject {
             if (s.indexOf("launchers=") === 0 && s.length > 10) {
                 taskbarLine = s.slice(10);
                 break;
+            }
+        }
+
+        // taskbar launchers are stored as "applications:<id>.desktop,…";
+        // keep only the app entries (drop preferred:// etc.). `taskbarIds`
+        // was referenced below but never defined, so this migration threw a
+        // ReferenceError instead of seeding pins on first run.
+        var taskbarIds = [];
+        if (taskbarLine !== "") {
+            var titems = taskbarLine.split(",");
+            for (var k = 0; k < titems.length; k++) {
+                var tu = titems[k].trim();
+                if (tu.indexOf("applications:") === 0) {
+                    var tid = tu.slice(13);
+                    if (tid !== "" && taskbarIds.indexOf(tid) < 0) { taskbarIds.push(tid); }
+                }
             }
         }
 

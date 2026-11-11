@@ -12,6 +12,12 @@ ColumnLayout {
     id: panel
     property Item tab: null
 
+    // paired devices are listed when the header is tapped
+    property bool deviceListOpen: false
+
+    readonly property bool hasDevice: tab !== null && tab.phoneDev !== null
+    readonly property bool reachable: hasDevice && tab.phoneDev.reachable
+
     anchors.fill: parent
     visible: tab ? tab.phoneMode : false
     opacity: visible ? 1 : 0
@@ -19,6 +25,9 @@ ColumnLayout {
         NumberAnimation { duration: 160 }
     }
     spacing: Kirigami.Units.gridUnit * 0.4
+
+    // collapse the device list whenever the panel is left
+    onVisibleChanged: if (!visible) { deviceListOpen = false; }
 
     // re-run the device search a moment after --refresh
     Timer {
@@ -39,9 +48,13 @@ ColumnLayout {
                 panel.tab.phoneMode = false;
                 panel.tab.notifOpen = false;
                 panel.tab.touchpadOn = false;
+                panel.tab.commandsOpen = false;
+                panel.deviceListOpen = false;
                 DashState.closePhonePoll();
                 DashState.closePhoneNotifs();
+                DashState.closePhoneCommands();
             }
+            QQC2.ToolTip { text: "Back"; delay: 400 }
         }
         ColumnLayout {
             Layout.fillWidth: true
@@ -52,21 +65,55 @@ ColumnLayout {
                 font.weight: Font.DemiBold
                 color: Kirigami.Theme.textColor
             }
-            Text {
-                text: {
-                    var d = panel.tab.phoneDev;
-                    if (!d) { return "KDE Connect"; }
-                    return d.name + (d.reachable ? " · Connected" : " · Offline");
-                }
-                font.pixelSize: 9
-                elide: Text.ElideRight
+
+            // device line: dot shows reachability, and with more than one
+            // paired device it becomes a tap-to-switch control
+            RowLayout {
                 Layout.fillWidth: true
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
+                spacing: 5
+
+                Rectangle {
+                    Layout.alignment: Qt.AlignVCenter
+                    width: 7
+                    height: 7
+                    radius: 3.5
+                    color: !panel.hasDevice ? Qt.alpha(Kirigami.Theme.textColor, 0.3)
+                         : panel.reachable ? "#4caf50"
+                         : Kirigami.Theme.neutralTextColor
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: {
+                        var d = panel.tab ? panel.tab.phoneDev : null;
+                        if (!d) { return "No device connected"; }
+                        return d.name + (!d.reachable ? " · Offline" : "");
+                    }
+                    font.pixelSize: 9
+                    elide: Text.ElideRight
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
+                }
+                Kirigami.Icon {
+                    visible: DashState.phoneDevices.length > 1
+                    Layout.alignment: Qt.AlignVCenter
+                    source: panel.deviceListOpen ? "arrow-up" : "arrow-down"
+                    implicitWidth: 10
+                    implicitHeight: 10
+                    opacity: devPickHover.hovered ? 0.9 : 0.5
+                }
+                HoverHandler {
+                    id: devPickHover
+                    enabled: DashState.phoneDevices.length > 1
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    enabled: DashState.phoneDevices.length > 1
+                    onTapped: panel.deviceListOpen = !panel.deviceListOpen
+                }
             }
         }
         // battery chip
         Rectangle {
-            visible: panel.tab.phoneDev !== null && DashState.phoneBattery >= 0
+            visible: panel.hasDevice && DashState.phoneBattery >= 0
             Layout.alignment: Qt.AlignVCenter
             implicitWidth: phoneBatChip.implicitWidth + 14
             implicitHeight: 22
@@ -108,6 +155,81 @@ ColumnLayout {
         }
     }
 
+    // inline device switcher (only with more than one paired device)
+    ColumnLayout {
+        visible: panel.deviceListOpen && DashState.phoneDevices.length > 1
+        Layout.fillWidth: true
+        spacing: 3
+
+        Repeater {
+            model: DashState.phoneDevices
+
+            delegate: Rectangle {
+                id: devRow
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: 32
+                radius: 9
+                color: devRow.modelData.id === DashState.phoneId
+                       ? Qt.alpha(panel.tab.accent, 0.15)
+                       : (devRowHover.hovered
+                          ? Qt.alpha(Kirigami.Theme.textColor, 0.08)
+                          : Qt.alpha(Kirigami.Theme.textColor, 0.04))
+                border.width: 1
+                border.color: devRow.modelData.id === DashState.phoneId
+                              ? Qt.alpha(panel.tab.accent, 0.4)
+                              : Qt.alpha(Kirigami.Theme.textColor, 0.07)
+                Behavior on color {
+                    ColorAnimation { duration: 120 }
+                }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 7
+
+                    Rectangle {
+                        Layout.alignment: Qt.AlignVCenter
+                        width: 6
+                        height: 6
+                        radius: 3
+                        color: devRow.modelData.reachable ? "#4caf50"
+                             : Qt.alpha(Kirigami.Theme.textColor, 0.3)
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: devRow.modelData.name
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                    }
+                    Kirigami.Icon {
+                        visible: devRow.modelData.id === DashState.phoneId
+                        Layout.alignment: Qt.AlignVCenter
+                        source: "dialog-ok"
+                        implicitWidth: 12
+                        implicitHeight: 12
+                        color: panel.tab.accent
+                    }
+                }
+
+                HoverHandler {
+                    id: devRowHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    onTapped: {
+                        DashState.selectPhone(devRow.modelData.id);
+                        panel.deviceListOpen = false;
+                        panel.tab.commandsOpen = false;
+                        panel.tab.notifOpen = false;
+                    }
+                }
+            }
+        }
+    }
+
     Flickable {
         id: phoneScroll
         Layout.fillWidth: true
@@ -140,7 +262,10 @@ ColumnLayout {
         // Repeater) are accepted too
         default property alias content: psecCol.data
         property bool open: false
-        visible: height > 0
+        // NOTE: must be driven by `open`, not `height > 0` — a Layout skips
+        // invisible items, so a height-driven visibility would deadlock at 0
+        // and the section could never expand.
+        visible: open || height > 0
         Layout.fillWidth: true
         Layout.preferredHeight: open ? psecCol.implicitHeight : 0
         Behavior on Layout.preferredHeight {
@@ -165,6 +290,7 @@ ColumnLayout {
         id: pa
         property string lbl
         property string icn
+        property string tip: ""
         property bool sel: false
         signal triggered()
         Layout.fillWidth: true
@@ -179,15 +305,21 @@ ColumnLayout {
         border.color: pa.sel ? Qt.alpha(panel.tab.accent, 0.5)
                              : Qt.alpha(Kirigami.Theme.textColor, 0.08)
         opacity: enabled ? 1 : 0.4
+        scale: paTap.pressed ? 0.95 : 1.0
         Behavior on color {
             ColorAnimation { duration: 130 }
         }
         Behavior on opacity {
             NumberAnimation { duration: 130 }
         }
+        Behavior on scale {
+            NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+        }
 
         ColumnLayout {
             anchors.centerIn: parent
+            anchors.leftMargin: 4
+            anchors.rightMargin: 4
             spacing: 5
 
             Kirigami.Icon {
@@ -195,16 +327,18 @@ ColumnLayout {
                 isMask: true
                 implicitWidth: 17
                 implicitHeight: 17
-                color: pa.enabled
-                       ? Qt.alpha(Kirigami.Theme.textColor, 0.8)
-                       : Qt.alpha(Kirigami.Theme.textColor, 0.35)
+                color: pa.enabled ? Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                     : Qt.alpha(Kirigami.Theme.textColor, 0.35)
                 Layout.alignment: Qt.AlignHCenter
             }
             Text {
                 text: pa.lbl
                 font.pixelSize: 9
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.6)
+                color: pa.sel ? panel.tab.accent
+                     : Qt.alpha(Kirigami.Theme.textColor, 0.6)
                 Layout.alignment: Qt.AlignHCenter
+                Layout.maximumWidth: pa.width - 8
+                elide: Text.ElideRight
             }
         }
 
@@ -214,20 +348,98 @@ ColumnLayout {
             enabled: pa.enabled
         }
         TapHandler {
+            id: paTap
             enabled: pa.enabled
             onTapped: pa.triggered()
+        }
+        QQC2.ToolTip {
+            visible: paHv.hovered && pa.tip !== ""
+            text: pa.tip
+            delay: 500
+        }
+    }
+
+    // section header: label on the left, optional refresh/close on the right
+    component SectionHeader: RowLayout {
+        id: sh
+        property string title
+        property string actionIcon: ""
+        property string actionTip: ""
+        property bool closable: false
+        signal actionClicked()
+        signal closeClicked()
+
+        Layout.fillWidth: true
+        spacing: 6
+
+        Text {
+            text: sh.title
+            font.pixelSize: 9
+            font.weight: Font.DemiBold
+            font.letterSpacing: 1.2
+            color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
+        }
+        Item { Layout.fillWidth: true }
+        PC3.ToolButton {
+            visible: sh.actionIcon !== ""
+            implicitWidth: 22
+            implicitHeight: 22
+            icon.name: sh.actionIcon
+            display: QQC2.AbstractButton.IconOnly
+            onClicked: sh.actionClicked()
+            QQC2.ToolTip { visible: parent.hovered; text: sh.actionTip; delay: 400 }
+        }
+        PC3.ToolButton {
+            visible: sh.closable
+            implicitWidth: 22
+            implicitHeight: 22
+            icon.name: "window-close"
+            display: QQC2.AbstractButton.IconOnly
+            onClicked: sh.closeClicked()
+            QQC2.ToolTip { visible: parent.hovered; text: "Close"; delay: 400 }
+        }
+    }
+
+    // small cellular signal strength indicator (4 bars)
+    component SignalBars: Item {
+        id: sb
+        property int strength: 0          // 0..4
+        implicitWidth: 4 * 3 + 3 * 2
+        implicitHeight: 12
+
+        RowLayout {
+            anchors.bottom: parent.bottom
+            spacing: 2
+
+            Repeater {
+                model: 4
+
+                delegate: Rectangle {
+                    required property int index
+                    Layout.alignment: Qt.AlignBottom
+                    Layout.preferredWidth: 3
+                    Layout.preferredHeight: 4 + index * 2
+                    radius: 1
+                    color: index < sb.strength
+                           ? Qt.alpha(Kirigami.Theme.textColor, 0.8)
+                           : Qt.alpha(Kirigami.Theme.textColor, 0.18)
+                }
+            }
         }
     }
 
     // device + battery card
     Rectangle {
-        visible: panel.tab.phoneDev !== null
+        visible: panel.hasDevice
         Layout.fillWidth: true
-        Layout.preferredHeight: 86
+        Layout.preferredHeight: panel.reachable ? 86 : 104
         radius: 14
         color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
         border.width: 1
         border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
+        Behavior on Layout.preferredHeight {
+            NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        }
 
         RowLayout {
             anchors.fill: parent
@@ -294,21 +506,29 @@ ColumnLayout {
                         font.weight: Font.DemiBold
                         color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
                     }
+                    Kirigami.Icon {
+                        visible: DashState.phoneCharging
+                        source: "battery-charging"
+                        implicitWidth: 12
+                        implicitHeight: 12
+                        color: "#4fc3f7"
+                    }
                     Text {
-                        visible: DashState.phoneSignal >= 0 && DashState.phoneNetType !== ""
+                        visible: DashState.phoneNetType !== ""
                         text: "· " + DashState.phoneNetType
                         font.pixelSize: 10
                         color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
                     }
-                    Text {
-                        visible: DashState.phoneCharging
-                        text: "· charging"
-                        font.pixelSize: 10
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                    }
                     Item { Layout.fillWidth: true }
+                    // cellular strength (falls back to a Wi-Fi icon when the
+                    // phone reports no cellular data)
+                    SignalBars {
+                        visible: DashState.phoneSignal >= 0
+                        Layout.alignment: Qt.AlignVCenter
+                        strength: Math.max(0, Math.min(4, DashState.phoneSignal))
+                    }
                     Kirigami.Icon {
-                        visible: panel.tab.phoneDev && panel.tab.phoneDev.reachable
+                        visible: DashState.phoneSignal < 0 && panel.reachable
                         source: "network-wireless-connected"
                         implicitWidth: 12
                         implicitHeight: 12
@@ -337,30 +557,138 @@ ColumnLayout {
                         }
                     }
                 }
+
+                // offline hint: the device is paired but not reachable
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 1
+                    visible: !panel.reachable
+                    spacing: 5
+
+                    Kirigami.Icon {
+                        Layout.alignment: Qt.AlignVCenter
+                        source: "network-disconnect"
+                        isMask: true
+                        implicitWidth: 11
+                        implicitHeight: 11
+                        color: Kirigami.Theme.neutralTextColor
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Offline — actions are unavailable until it reconnects"
+                        font.pixelSize: 9
+                        wrapMode: Text.WordWrap
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
+                    }
+                }
             }
         }
     }
 
-    PhoneLabel { text2: "ACTIONS" }
+    // mirror the phone screen on the desktop (scrcpy over Wi-Fi).
+    // The helper reconnects adb and launches scrcpy detached, so the widget
+    // never blocks; the label flips to "Stop" while a mirror is up.
+    Rectangle {
+        id: mirrorBtn
+        visible: panel.hasDevice
+        Layout.fillWidth: true
+        implicitHeight: 44
+        radius: 12
+        color: DashState.mirroring
+               ? (mirrorHover.hovered ? Qt.alpha(panel.tab.accent, 0.24)
+                                      : Qt.alpha(panel.tab.accent, 0.16))
+               : (mirrorHover.hovered ? Qt.alpha(Kirigami.Theme.textColor, 0.09)
+                                      : Qt.alpha(Kirigami.Theme.textColor, 0.045))
+        border.width: 1
+        border.color: DashState.mirroring
+                      ? Qt.alpha(panel.tab.accent, 0.45)
+                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
+        scale: mirrorTap.pressed ? 0.98 : 1.0
+        Behavior on color {
+            ColorAnimation { duration: 130 }
+        }
+        Behavior on scale {
+            NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+        }
 
-    // actions
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 9
+
+            Kirigami.Icon {
+                Layout.alignment: Qt.AlignVCenter
+                source: DashState.mirroring ? "window-close" : "smartphone"
+                isMask: true
+                implicitWidth: 16
+                implicitHeight: 16
+                color: DashState.mirroring ? panel.tab.accent
+                     : Qt.alpha(Kirigami.Theme.textColor, 0.8)
+            }
+            Text {
+                Layout.fillWidth: true
+                text: DashState.mirroring ? "Stop mirroring" : "Mirror phone screen"
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+                color: Qt.alpha(Kirigami.Theme.textColor, 0.9)
+            }
+            Text {
+                text: "scrcpy"
+                font.pixelSize: 9
+                color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
+            }
+        }
+
+        HoverHandler {
+            id: mirrorHover
+            cursorShape: Qt.PointingHandCursor
+        }
+        TapHandler {
+            id: mirrorTap
+            onTapped: {
+                if (DashState.mirroring) {
+                    DashState.mirrorStop();
+                    panel.tab.showPhoneToast("Closing the phone mirror", "window-close");
+                } else {
+                    DashState.mirrorStart();
+                    panel.tab.showPhoneToast("Starting the phone mirror…", "smartphone");
+                }
+            }
+        }
+        QQC2.ToolTip {
+            visible: mirrorHover.hovered
+            text: "Mirror the phone over Wi-Fi with scrcpy"
+            delay: 500
+        }
+    }
+
+    PhoneLabel {
+        visible: panel.hasDevice
+        text2: "ACTIONS"
+    }
+
+    // actions (hidden entirely until a device is paired)
     RowLayout {
+        visible: panel.hasDevice
         Layout.fillWidth: true
         spacing: 8
 
         Repeater {
             model: [
-                { lbl: "Ring",    icn: "bell",                             act: "ring"     },
-                { lbl: "Ping",    icn: "preferences-desktop-notification", act: "ping"     },
-                { lbl: "Control", icn: "input-mouse",                      act: "touchpad" },
-                { lbl: "Notifs",  icn: "dialog-information",               act: "notifs"   }
+                { lbl: "Ring",    icn: "bell",                             act: "ring",     tip: "Ring the phone"           },
+                { lbl: "Ping",    icn: "preferences-desktop-notification", act: "ping",     tip: "Ping the phone"           },
+                { lbl: "Control", icn: "input-mouse",                      act: "touchpad", tip: "Remote touchpad & clicks" },
+                { lbl: "Alerts",  icn: "dialog-information",               act: "notifs",   tip: "Phone notifications"      }
             ]
 
             delegate: PhoneAction {
                 required property var modelData
                 lbl: modelData.lbl
                 icn: modelData.icn
-                enabled: panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+                tip: modelData.tip
+                enabled: panel.reachable
                 sel: (modelData.act === "touchpad" && panel.tab.touchpadOn)
                   || (modelData.act === "notifs" && panel.tab.notifOpen)
                 onTriggered: {
@@ -383,34 +711,40 @@ ColumnLayout {
     }
 
     PhoneLabel {
-        visible: panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+        visible: panel.reachable
         text2: "SEND TO PHONE"
     }
 
     // second row: send / share actions
     RowLayout {
-        visible: panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+        visible: panel.reachable
         Layout.fillWidth: true
         spacing: 8
 
         Repeater {
             model: [
-                { lbl: "File",     icn: "document-send", act: "file"      },
-                { lbl: "Clipboard",icn: "edit-copy",     act: "clipboard" },
-                { lbl: "Browse",   icn: "folder-remote", act: "browse"    },
-                { lbl: "Commands", icn: "system-run",    act: "commands"  }
+                { lbl: "File",      icn: "document-send", act: "file",      tip: "Send a file to the phone"    },
+                { lbl: "Clipboard", icn: "edit-copy",     act: "clipboard", tip: "Send the desktop clipboard"  },
+                { lbl: "Browse",    icn: "folder-remote", act: "browse",    tip: "Browse phone storage"        },
+                { lbl: "Run",       icn: "system-run",    act: "commands",  tip: "Run a command on the phone"  }
             ]
 
             delegate: PhoneAction {
                 required property var modelData
                 lbl: modelData.lbl
                 icn: modelData.icn
+                tip: modelData.tip
+                sel: modelData.act === "commands" && panel.tab.commandsOpen
                 onTriggered: {
                     if (modelData.act === "file") {
                         DashState.phoneAction("sharefile");
                     } else if (modelData.act === "commands") {
-                        DashState.phoneAction("notifycommands");
-                        panel.tab.showPhoneToast("Fetching phone commands…", "system-run");
+                        panel.tab.commandsOpen = !panel.tab.commandsOpen;
+                        if (panel.tab.commandsOpen) {
+                            DashState.fetchPhoneCommands();
+                        } else {
+                            DashState.closePhoneCommands();
+                        }
                     } else {
                         DashState.phoneAction(modelData.act);
                         if (modelData.act === "clipboard") {
@@ -426,8 +760,13 @@ ColumnLayout {
 
     // virtual touchpad (mouse control)
     PhoneSection {
-        open: panel.tab.touchpadOn
-              && panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+        open: panel.tab.touchpadOn && panel.reachable
+
+        SectionHeader {
+            title: "TOUCHPAD"
+            closable: true
+            onCloseClicked: panel.tab.touchpadOn = false
+        }
 
         Rectangle {
             id: touchpad
@@ -532,7 +871,7 @@ ColumnLayout {
 
     // inputs: send a link + type on the phone
     ColumnLayout {
-        visible: panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+        visible: panel.reachable
         Layout.fillWidth: true
         spacing: 8
 
@@ -637,28 +976,15 @@ ColumnLayout {
 
     // phone notifications
     PhoneSection {
-        open: panel.tab.notifOpen
-              && panel.tab.phoneDev !== null && panel.tab.phoneDev.reachable
+        open: panel.tab.notifOpen && panel.reachable
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-            Text {
-                text: "PHONE NOTIFICATIONS"
-                font.pixelSize: 9
-                font.weight: Font.DemiBold
-                font.letterSpacing: 1.2
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-            }
-            Item { Layout.fillWidth: true }
-            PC3.ToolButton {
-                icon.name: "view-refresh"
-                implicitWidth: 22
-                implicitHeight: 22
-                display: QQC2.AbstractButton.IconOnly
-                onClicked: DashState.fetchPhoneNotifs()
-                QQC2.ToolTip { text: "Refresh"; delay: 300 }
-            }
+        SectionHeader {
+            title: "PHONE NOTIFICATIONS"
+            actionIcon: "view-refresh"
+            actionTip: "Refresh"
+            closable: true
+            onActionClicked: DashState.fetchPhoneNotifs()
+            onCloseClicked: panel.tab.notifOpen = false
         }
 
         Text {
@@ -742,10 +1068,101 @@ ColumnLayout {
         }
     }
 
+    // phone "Run commands" list — tap an entry to run it on the phone
+    PhoneSection {
+        open: panel.tab.commandsOpen && panel.reachable
+
+        SectionHeader {
+            title: "PHONE COMMANDS"
+            actionIcon: "view-refresh"
+            actionTip: "Reload commands"
+            closable: true
+            onActionClicked: DashState.fetchPhoneCommands()
+            onCloseClicked: panel.tab.commandsOpen = false
+        }
+
+        Text {
+            visible: DashState.phoneCommands.length === 0
+            Layout.fillWidth: true
+            text: "No commands found — enable the “Run commands” plugin for this PC in KDE Connect on your phone."
+            font.pixelSize: 10
+            wrapMode: Text.WordWrap
+            color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
+        }
+
+        Repeater {
+            model: DashState.phoneCommands
+
+            delegate: Rectangle {
+                id: cmdRow
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: 38
+                radius: 10
+                color: cmdHover.hovered
+                       ? Qt.alpha(panel.tab.accent, 0.14)
+                       : Qt.alpha(Kirigami.Theme.textColor, 0.04)
+                border.width: 1
+                border.color: cmdHover.hovered
+                              ? Qt.alpha(panel.tab.accent, 0.35)
+                              : Qt.alpha(Kirigami.Theme.textColor, 0.07)
+                Behavior on color {
+                    ColorAnimation { duration: 120 }
+                }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 8
+
+                    Kirigami.Icon {
+                        Layout.alignment: Qt.AlignVCenter
+                        source: "system-run"
+                        isMask: true
+                        implicitWidth: 14
+                        implicitHeight: 14
+                        color: cmdHover.hovered ? panel.tab.accent
+                             : Qt.alpha(Kirigami.Theme.textColor, 0.7)
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: cmdRow.modelData.name
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
+                    }
+                    Kirigami.Icon {
+                        Layout.alignment: Qt.AlignVCenter
+                        source: "arrow-right"
+                        implicitWidth: 12
+                        implicitHeight: 12
+                        opacity: cmdHover.hovered ? 0.8 : 0.35
+                    }
+                }
+
+                HoverHandler {
+                    id: cmdHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    onTapped: {
+                        DashState.phoneAction("commandrun", cmdRow.modelData.id);
+                        panel.tab.showPhoneToast("Running " + cmdRow.modelData.name + "…", "system-run");
+                    }
+                }
+                QQC2.ToolTip {
+                    visible: cmdHover.hovered && cmdRow.modelData.id !== cmdRow.modelData.name
+                    text: cmdRow.modelData.id
+                    delay: 500
+                }
+            }
+        }
+    }
+
     // phone media card
     Rectangle {
-        visible: panel.tab.phoneDev !== null
-                 && panel.tab.phoneDev.reachable
+        visible: panel.hasDevice && panel.reachable
                  && DashState.phoneMedia !== null
         Layout.fillWidth: true
         Layout.preferredHeight: 108
@@ -901,8 +1318,9 @@ ColumnLayout {
 
     // empty state
     ColumnLayout {
-        visible: panel.tab.phoneDev === null
-        Layout.alignment: Qt.AlignHCenter
+        visible: !panel.hasDevice
+        Layout.fillWidth: true
+        Layout.topMargin: 12
         spacing: 8
 
         Item {
@@ -934,18 +1352,32 @@ ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
         }
         Text {
-            text: "Pair a device with KDE Connect, or search again."
+            text: "Pair a device with KDE Connect, then search again."
             font.pixelSize: 10
             color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
             Layout.alignment: Qt.AlignHCenter
         }
-        PC3.Button {
-            text: "Search again"
-            icon.name: "view-refresh"
-            Layout.alignment: Qt.AlignHCenter
-            onClicked: {
-                DashState.phoneAction("refresh");
-                phoneRefreshTimer.restart();
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: 4
+            spacing: 8
+
+            PC3.Button {
+                Layout.fillWidth: true
+                text: "Search again"
+                icon.name: "view-refresh"
+                onClicked: {
+                    DashState.phoneAction("refresh");
+                    phoneRefreshTimer.restart();
+                    panel.tab.showPhoneToast("Searching for devices…", "view-refresh");
+                }
+            }
+            PC3.Button {
+                Layout.fillWidth: true
+                text: "Open KDE Connect"
+                icon.name: "smartphone"
+                onClicked: DashState.openKdeConnect()
             }
         }
     }

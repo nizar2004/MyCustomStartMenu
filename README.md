@@ -30,9 +30,13 @@ system & media cards and power controls — all in one popup.
 - 🧲 **Drag & drop** — drag any app out of the menu onto the taskbar, the
   desktop or another window (native KDE application drag), or drag it inside
   the Pinned grid to reorder with a live Kickoff-style shuffle.
-- 📱 **Phone panel** — KDE Connect control: battery, ring, ping, send files,
-  clipboard, browse storage, notifications, a virtual touchpad, send-a-link and
-  type-on-phone inputs, and phone media controls.
+- 📱 **Phone panel** — KDE Connect control: device switcher, battery/signal,
+  ring, ping, send files, clipboard, browse storage, notifications, a virtual
+  touchpad, run-commands, send-a-link and type-on-phone inputs, and phone media.
+- 🖥️ **Mirror the phone** — one click mirrors the phone on the desktop with
+  **scrcpy** over Wi-Fi, no cable: the widget discovers the wireless-debugging
+  endpoint, reconnects adb and launches scrcpy detached. The button flips to
+  *Stop mirroring* while it is up.
 - 📊 **System card** — uptime, memory, disk and network at a glance; click for
   the full detail view (per-core CPU/GPU, temperatures, swap, battery…).
 - 🎵 **Media card** — MPRIS controls and album art for whatever is playing;
@@ -44,6 +48,8 @@ system & media cards and power controls — all in one popup.
 
 ## 🆕 What's new
 
+- **Phone mirroring** — a *Mirror phone screen* button in the phone panel runs scrcpy over Wi-Fi through `contents/code/scrcpy.sh`, and `install.sh` now installs scrcpy + adb for you (asking for the sudo password up front).
+- **Phone panel refresh** — connection dot, tap-to-switch device picker, signal bars, offline banner, section headers, and a runnable phone-commands list. Also fixes the collapsible sections (Notifications / Touchpad) that never expanded.
 - **Recently Used** category that tracks your last launches (`~/.local/state/custom-start-menu/recent`).
 - **Right-click context menu** on every tile: Launch · Pin/Unpin · Open Containing Folder · Copy Command.
 - **`Tab` / `Shift+Tab`** to cycle categories and **`PageUp` / `PageDown`** to page through apps.
@@ -70,6 +76,11 @@ system & media cards and power controls — all in one popup.
 curl -fsSL https://raw.githubusercontent.com/nizar2004/MyCustomStartMenu/main/install.sh | bash
 ```
 
+The script installs the widget **per-user (no root)** and, if phone mirroring
+dependencies are missing, installs `scrcpy` + `adb` as system packages — it
+asks for your **sudo password up front**, once, for those. Everything else
+happens without root.
+
 **From a clone:**
 
 ```bash
@@ -86,8 +97,10 @@ Then add it to your panel: **right-click the panel → Add Widgets → Custom St
 Right-click the widget → **Configure…** to change the panel icon, accent colour,
 default category, refresh interval and which cards are shown.
 
-**Requirements** — KDE Plasma 6, `systemd`, `glib2`. Optional: `lspci` for the GPU
-line, `kdeconnect` for the phone panel. No root needed, it installs per user.
+**Requirements** — KDE Plasma 6, `systemd`, `glib2`. Optional: `lspci` for the
+GPU line, `kdeconnect` for the phone panel, and `scrcpy` + `adb`
+(`android-tools` + `android-udev`) for phone mirroring. The widget itself
+installs per user; only the optional packages need sudo.
 
 **Uninstall:**
 
@@ -109,6 +122,7 @@ contents/
 │   ├── launchapp.sh   Kickoff-style launching via systemd-run
 │   ├── recent.sh      recently-used history
 │   ├── phone.sh       KDE Connect bridge
+│   ├── scrcpy.sh      Wi-Fi phone mirroring (scrcpy)
 │   └── readfavs.sh / osid.sh
 ├── ui/
 │   ├── main.qml         PlasmoidItem, panel button, popup lifecycle

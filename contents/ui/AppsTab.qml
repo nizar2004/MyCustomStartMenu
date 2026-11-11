@@ -37,6 +37,7 @@ Item {
     property bool phoneMode: false       // right panel switched to phone control
     property bool notifOpen: false       // phone notifications list expanded
     property bool touchpadOn: false      // virtual touchpad (mouse control) open
+    property bool commandsOpen: false    // phone "run commands" list expanded
 
     // tiny toast for action feedback inside the phone panel
     property string _phoneToast: ""
@@ -650,8 +651,10 @@ Item {
             appsTab.phoneMode = false;
             appsTab.notifOpen = false;
             appsTab.touchpadOn = false;
+            appsTab.commandsOpen = false;
             DashState.closePhonePoll();
             DashState.closePhoneNotifs();
+            DashState.closePhoneCommands();
             appsTab.clearSel();
             searchField.text = "";
             scroller.contentY = 0;
@@ -970,14 +973,37 @@ Item {
                 contentWidth: width
                 contentHeight: sectionsCol.height
                 boundsBehavior: Flickable.StopAtBounds
-                // Kickoff's views are not mouse-flickable either — only the
-                // wheel and the scrollbar scroll them. This keeps every drag
-                // on a tile a pure app-drag (to the taskbar or inside the
-                // Pinned grid) instead of a fight with the Flickable, and
-                // clicks stay reliable (wobble ≤ drag threshold = launch)
+                // Pointer FLICKING stays off: every drag on a tile must be a
+                // pure app-drag (to the taskbar or inside the Pinned grid)
+                // instead of a fight with the Flickable, and clicks stay
+                // reliable (wobble ≤ drag threshold = launch).
+                // CAVEAT: in Qt 6 `interactive: false` also kills the
+                // Flickable's OWN wheel/touchpad scrolling (see
+                // QQuickFlickable::wheelEvent — it bails when !interactive),
+                // so the WheelHandler below scrolls contentY by hand.
                 interactive: false
 
                 QQC2.ScrollBar.vertical: PC3.ScrollBar { }
+
+                // Scroll the app grid with a mouse wheel or a two-finger
+                // touchpad gesture. WheelHandler defaults to Mouse only
+                // (its ctor sets acceptedDevices = Mouse), so TouchPad must
+                // be added explicitly or touchpad scrolling is dropped.
+                // pixelDelta (touchpad / high-resolution wheel) gives the
+                // smooth native glide; a clicky mouse wheel only reports
+                // angleDelta, so fall back to a fixed step per notch.
+                WheelHandler {
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    onWheel: (event) => {
+                        // 72px/notch = Qt's own default (wheelScrollLines 3 × 24)
+                        var dy = (event.pixelDelta && event.pixelDelta.y !== 0)
+                               ? event.pixelDelta.y
+                               : (event.angleDelta.y / 120) * 72;
+                        var maxY = Math.max(0, scroller.contentHeight - scroller.height);
+                        scroller.contentY = Math.max(0, Math.min(maxY, scroller.contentY - dy));
+                        event.accepted = true;
+                    }
+                }
 
                 Column {
                     id: sectionsCol
@@ -1077,6 +1103,21 @@ Item {
                                     width: parent.width - x - 22
                                     height: 1
                                     color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
+                                }
+                                // clear the "Recently Used" history in place
+                                PC3.ToolButton {
+                                    visible: section.modelData.name === "Recently Used"
+                                             && appsTab.search === ""
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    implicitWidth: 22
+                                    implicitHeight: 22
+                                    icon.name: "edit-clear-all"
+                                    display: QQC2.AbstractButton.IconOnly
+                                    onClicked: DashState.clearRecent()
+                                    QQC2.ToolTip {
+                                        text: "Clear recently used"
+                                        delay: 400
+                                    }
                                 }
                             }
 
@@ -1856,6 +1897,7 @@ Item {
                     onTapped: {
                         appsTab.phoneMode = true;
                         DashState.refreshPhone();
+                        DashState.refreshMirrorState();
                     }
                 }
                 QQC2.ToolTip {

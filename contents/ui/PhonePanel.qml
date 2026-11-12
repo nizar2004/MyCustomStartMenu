@@ -5,9 +5,9 @@ import QtQuick.Effects
 import org.kde.plasma.components as PC3
 import org.kde.kirigami as Kirigami
 
-// Phone panel (KDE Connect): device/battery card, actions, touchpad,
-// send-to-phone inputs, notifications and phone media. Extracted from
-// AppsTab; `tab` is the AppsTab instance.
+// Phone panel (KDE Connect): device/battery card, actions (ring, ping,
+// screen mirror), send-to-phone inputs, notifications and phone commands.
+// Extracted from AppsTab; `tab` is the AppsTab instance.
 ColumnLayout {
     id: panel
     property Item tab: null
@@ -47,7 +47,6 @@ ColumnLayout {
             onClicked: {
                 panel.tab.phoneMode = false;
                 panel.tab.notifOpen = false;
-                panel.tab.touchpadOn = false;
                 panel.tab.commandsOpen = false;
                 panel.deviceListOpen = false;
                 DashState.closePhonePoll();
@@ -482,13 +481,17 @@ ColumnLayout {
                     color: Kirigami.Theme.textColor
                 }
 
+                // battery / signal line — only meaningful while connected
+                // (the phone's battery comes from KDE Connect, so it is
+                // unavailable when the device is offline)
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
+                    visible: panel.reachable
 
                     Kirigami.Icon {
+                        visible: DashState.phoneBattery >= 0
                         source: {
-                            if (DashState.phoneBattery < 0) { return "battery-missing"; }
                             if (DashState.phoneCharging) { return "battery-good-charging"; }
                             var b = DashState.phoneBattery;
                             return b > 80 ? "battery-full"
@@ -500,8 +503,8 @@ ColumnLayout {
                         implicitHeight: 14
                     }
                     Text {
-                        text: DashState.phoneBattery >= 0
-                              ? DashState.phoneBattery + "%" : "—"
+                        visible: DashState.phoneBattery >= 0
+                        text: DashState.phoneBattery + "%"
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
                         color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
@@ -528,7 +531,7 @@ ColumnLayout {
                         strength: Math.max(0, Math.min(4, DashState.phoneSignal))
                     }
                     Kirigami.Icon {
-                        visible: DashState.phoneSignal < 0 && panel.reachable
+                        visible: DashState.phoneSignal < 0
                         source: "network-wireless-connected"
                         implicitWidth: 12
                         implicitHeight: 12
@@ -571,7 +574,7 @@ ColumnLayout {
                         isMask: true
                         implicitWidth: 11
                         implicitHeight: 11
-                        color: Kirigami.Theme.neutralTextColor
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
                     }
                     Text {
                         Layout.fillWidth: true
@@ -585,91 +588,13 @@ ColumnLayout {
         }
     }
 
-    // mirror the phone screen on the desktop (scrcpy over Wi-Fi).
-    // The helper reconnects adb and launches scrcpy detached, so the widget
-    // never blocks; the label flips to "Stop" while a mirror is up.
-    Rectangle {
-        id: mirrorBtn
-        visible: panel.hasDevice
-        Layout.fillWidth: true
-        implicitHeight: 44
-        radius: 12
-        color: DashState.mirroring
-               ? (mirrorHover.hovered ? Qt.alpha(panel.tab.accent, 0.24)
-                                      : Qt.alpha(panel.tab.accent, 0.16))
-               : (mirrorHover.hovered ? Qt.alpha(Kirigami.Theme.textColor, 0.09)
-                                      : Qt.alpha(Kirigami.Theme.textColor, 0.045))
-        border.width: 1
-        border.color: DashState.mirroring
-                      ? Qt.alpha(panel.tab.accent, 0.45)
-                      : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-        scale: mirrorTap.pressed ? 0.98 : 1.0
-        Behavior on color {
-            ColorAnimation { duration: 130 }
-        }
-        Behavior on scale {
-            NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
-        }
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 9
-
-            Kirigami.Icon {
-                Layout.alignment: Qt.AlignVCenter
-                source: DashState.mirroring ? "window-close" : "smartphone"
-                isMask: true
-                implicitWidth: 16
-                implicitHeight: 16
-                color: DashState.mirroring ? panel.tab.accent
-                     : Qt.alpha(Kirigami.Theme.textColor, 0.8)
-            }
-            Text {
-                Layout.fillWidth: true
-                text: DashState.mirroring ? "Stop mirroring" : "Mirror phone screen"
-                font.pixelSize: 11
-                font.weight: Font.DemiBold
-                elide: Text.ElideRight
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.9)
-            }
-            Text {
-                text: "scrcpy"
-                font.pixelSize: 9
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-            }
-        }
-
-        HoverHandler {
-            id: mirrorHover
-            cursorShape: Qt.PointingHandCursor
-        }
-        TapHandler {
-            id: mirrorTap
-            onTapped: {
-                if (DashState.mirroring) {
-                    DashState.mirrorStop();
-                    panel.tab.showPhoneToast("Closing the phone mirror", "window-close");
-                } else {
-                    DashState.mirrorStart();
-                    panel.tab.showPhoneToast("Starting the phone mirror…", "smartphone");
-                }
-            }
-        }
-        QQC2.ToolTip {
-            visible: mirrorHover.hovered
-            text: "Mirror the phone over Wi-Fi with scrcpy"
-            delay: 500
-        }
-    }
-
     PhoneLabel {
         visible: panel.hasDevice
         text2: "ACTIONS"
     }
 
-    // actions (hidden entirely until a device is paired)
+    // actions (hidden entirely until a device is paired). "Mirror" drives
+    // scrcpy over Wi-Fi and flips to "Stop" while a mirror is up.
     RowLayout {
         visible: panel.hasDevice
         Layout.fillWidth: true
@@ -677,23 +602,34 @@ ColumnLayout {
 
         Repeater {
             model: [
-                { lbl: "Ring",    icn: "bell",                             act: "ring",     tip: "Ring the phone"           },
-                { lbl: "Ping",    icn: "preferences-desktop-notification", act: "ping",     tip: "Ping the phone"           },
-                { lbl: "Control", icn: "input-mouse",                      act: "touchpad", tip: "Remote touchpad & clicks" },
-                { lbl: "Alerts",  icn: "dialog-information",               act: "notifs",   tip: "Phone notifications"      }
+                { lbl: "Ring",   icn: "bell",                             act: "ring",   tip: "Ring the phone"          },
+                { lbl: "Ping",   icn: "preferences-desktop-notification", act: "ping",   tip: "Ping the phone"          },
+                { lbl: "Mirror", icn: "smartphone",                       act: "mirror", tip: "Mirror the screen (scrcpy over Wi-Fi)" },
+                { lbl: "Alerts", icn: "dialog-information",               act: "notifs", tip: "Phone notifications"     }
             ]
 
             delegate: PhoneAction {
                 required property var modelData
-                lbl: modelData.lbl
-                icn: modelData.icn
-                tip: modelData.tip
-                enabled: panel.reachable
-                sel: (modelData.act === "touchpad" && panel.tab.touchpadOn)
+                lbl: (modelData.act === "mirror" && DashState.mirroring)
+                     ? "Stop" : modelData.lbl
+                icn: (modelData.act === "mirror" && DashState.mirroring)
+                     ? "window-close" : modelData.icn
+                tip: (modelData.act === "mirror" && DashState.mirroring)
+                     ? "Stop the phone mirror" : modelData.tip
+                // the mirror goes over adb/Wi-Fi, so it stays usable even
+                // when KDE Connect reports the phone as offline
+                enabled: modelData.act === "mirror" ? panel.hasDevice : panel.reachable
+                sel: (modelData.act === "mirror" && DashState.mirroring)
                   || (modelData.act === "notifs" && panel.tab.notifOpen)
                 onTriggered: {
-                    if (modelData.act === "touchpad") {
-                        panel.tab.touchpadOn = !panel.tab.touchpadOn;
+                    if (modelData.act === "mirror") {
+                        if (DashState.mirroring) {
+                            DashState.mirrorStop();
+                            panel.tab.showPhoneToast("Closing the phone mirror", "window-close");
+                        } else {
+                            DashState.mirrorStart();
+                            panel.tab.showPhoneToast("Starting the phone mirror…", "smartphone");
+                        }
                     } else if (modelData.act === "notifs") {
                         panel.tab.notifOpen = !panel.tab.notifOpen;
                         if (panel.tab.notifOpen) { DashState.fetchPhoneNotifs(); }
@@ -758,118 +694,7 @@ ColumnLayout {
         }
     }
 
-    // virtual touchpad (mouse control)
-    PhoneSection {
-        open: panel.tab.touchpadOn && panel.reachable
-
-        SectionHeader {
-            title: "TOUCHPAD"
-            closable: true
-            onCloseClicked: panel.tab.touchpadOn = false
-        }
-
-        Rectangle {
-            id: touchpad
-            Layout.fillWidth: true
-            Layout.preferredHeight: 120
-            radius: 14
-            color: touchDrag.containsMouse
-                   ? Qt.alpha(Kirigami.Theme.textColor, 0.06)
-                   : Qt.alpha(Kirigami.Theme.textColor, 0.045)
-            border.width: 1
-            border.color: touchDrag.pressed
-                          ? Qt.alpha(panel.tab.accent, 0.5)
-                          : Qt.alpha(Kirigami.Theme.textColor, 0.08)
-            Behavior on border.color {
-                ColorAnimation { duration: 130 }
-            }
-
-            Text {
-                anchors.centerIn: parent
-                text: touchDrag.pressed ? "controlling…" : "drag to move · tap to click · scroll to scroll"
-                font.pixelSize: 10
-                color: Qt.alpha(Kirigami.Theme.textColor, 0.4)
-            }
-
-            MouseArea {
-                id: touchDrag
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.BlankCursor
-                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                property real accX: 0
-                property real accY: 0
-                property point last: Qt.point(0, 0)
-
-                onPressed: (mouse) => {
-                    last = Qt.point(mouse.x, mouse.y);
-                    accX = 0;
-                    accY = 0;
-                    cursorTimer.restart();
-                }
-                onPositionChanged: (mouse) => {
-                    accX += mouse.x - last.x;
-                    accY += mouse.y - last.y;
-                    last = Qt.point(mouse.x, mouse.y);
-                }
-                onReleased: (mouse) => {
-                    cursorTimer.stop();
-                    if (Math.abs(accX) + Math.abs(accY) < 4) {
-                        DashState.phoneAction("click", "single");  // tap = left click
-                    } else {
-                        DashState.phoneAction("cursor", Math.round(accX), Math.round(accY));
-                    }
-                    accX = 0;
-                    accY = 0;
-                }
-                onCanceled: cursorTimer.stop()
-                onWheel: (wheel) => {
-                    var steps = wheel.angleDelta.y / 120;
-                    if (steps === 0) { steps = wheel.angleDelta.y > 0 ? 1 : -1; }
-                    DashState.phoneAction("scroll", Math.round(steps));
-                }
-            }
-        }
-
-        Timer {
-            id: cursorTimer
-            interval: 60
-            repeat: true
-            running: false
-            onTriggered: {
-                if (Math.abs(touchDrag.accX) + Math.abs(touchDrag.accY) >= 1) {
-                    DashState.phoneAction("cursor",
-                                          Math.round(touchDrag.accX),
-                                          Math.round(touchDrag.accY));
-                    touchDrag.accX = 0;
-                    touchDrag.accY = 0;
-                }
-            }
-        }
-
-        // click buttons
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-
-            Repeater {
-                model: [
-                    { lbl: "Left",   icn: "input-mouse", act: "single" },
-                    { lbl: "Double", icn: "input-mouse", act: "double" },
-                    { lbl: "Right",  icn: "input-mouse", act: "right"  }
-                ]
-
-                delegate: PhoneAction {
-                    required property var modelData
-                    lbl: modelData.lbl
-                    icn: modelData.icn
-                    onTriggered: DashState.phoneAction("click", modelData.act)
-                }
-            }
-        }
-    }
-
-    // inputs: send a link + type on the phone
+// inputs: send a link + type on the phone
     ColumnLayout {
         visible: panel.reachable
         Layout.fillWidth: true
@@ -1160,163 +985,7 @@ ColumnLayout {
         }
     }
 
-    // phone media card
-    Rectangle {
-        visible: panel.hasDevice && panel.reachable
-                 && DashState.phoneMedia !== null
-        Layout.fillWidth: true
-        Layout.preferredHeight: 108
-        radius: 14
-        color: Qt.alpha(Kirigami.Theme.textColor, 0.045)
-        border.width: 1
-        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 12
-            spacing: 8
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-
-                Item {
-                    Layout.preferredWidth: 40
-                    Layout.preferredHeight: 40
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: 10
-                        visible: phoneArt.status !== Image.Ready
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.08)
-                        Kirigami.Icon {
-                            anchors.centerIn: parent
-                            source: "audio-x-generic"
-                            isMask: true
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.55)
-                            implicitWidth: 18
-                            implicitHeight: 18
-                        }
-                    }
-
-                    Image {
-                        id: phoneArt
-                        anchors.fill: parent
-                        visible: false
-                        source: DashState.phoneMedia && DashState.phoneMedia.art
-                                ? DashState.phoneMedia.art : ""
-                        fillMode: Image.PreserveAspectCrop
-                        smooth: true
-                        asynchronous: true
-                    }
-
-                    MultiEffect {
-                        anchors.fill: parent
-                        source: phoneArt
-                        maskEnabled: true
-                        maskSource: Rectangle {
-                            width: 40
-                            height: 40
-                            radius: 10
-                            visible: false
-                        }
-                        maskThresholdMin: 0.1
-                        maskSpreadAtMin: 1.0
-                        visible: phoneArt.status === Image.Ready
-                    }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignVCenter
-                    spacing: 2
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: DashState.phoneMedia && DashState.phoneMedia.title
-                              ? DashState.phoneMedia.title
-                              : "Nothing playing on your phone"
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                        color: DashState.phoneMedia ? Kirigami.Theme.textColor
-                             : Qt.alpha(Kirigami.Theme.textColor, 0.45)
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: DashState.phoneMedia && DashState.phoneMedia.artist
-                              ? DashState.phoneMedia.artist : "—"
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.5)
-                    }
-                }
-            }
-
-            Row {
-                Layout.alignment: Qt.AlignHCenter
-                spacing: 14
-
-                PC3.ToolButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    icon.name: "media-skip-backward"
-                    icon.width: 15
-                    icon.height: 15
-                    display: QQC2.AbstractButton.IconOnly
-                    onClicked: DashState.phoneAction("prev")
-                }
-
-                Item {
-                    width: 34
-                    height: 34
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: 17
-                        color: panel.tab.accent
-                        scale: phonePlayHover.hovered ? 1.1 : 1.0
-                        Behavior on scale {
-                            NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
-                        }
-                    }
-                    HoverHandler { id: phonePlayHover }
-                    Kirigami.Icon {
-                        anchors.centerIn: parent
-                        source: DashState.phoneMedia && DashState.phoneMedia.status === "Playing"
-                                ? "media-playback-pause" : "media-playback-start"
-                        isMask: true
-                        color: panel.tab.onAccent
-                        implicitWidth: 15
-                        implicitHeight: 15
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (DashState.phoneMedia && DashState.phoneMedia.status === "Playing") {
-                                DashState.phoneAction("pause");
-                            } else {
-                                DashState.phoneAction("play");
-                            }
-                        }
-                    }
-                }
-
-                PC3.ToolButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    icon.name: "media-skip-forward"
-                    icon.width: 15
-                    icon.height: 15
-                    display: QQC2.AbstractButton.IconOnly
-                    onClicked: DashState.phoneAction("next")
-                }
-            }
-        }
-    }
-
-    // empty state
+// empty state
     ColumnLayout {
         visible: !panel.hasDevice
         Layout.fillWidth: true

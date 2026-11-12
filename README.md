@@ -31,8 +31,8 @@ system & media cards and power controls — all in one popup.
   desktop or another window (native KDE application drag), or drag it inside
   the Pinned grid to reorder with a live Kickoff-style shuffle.
 - 📱 **Phone panel** — KDE Connect control: device switcher, battery/signal,
-  ring, ping, send files, clipboard, browse storage, notifications, a virtual
-  touchpad, run-commands, send-a-link and type-on-phone inputs, and phone media.
+  ring, ping, send files, clipboard, browse storage, notifications,
+  run-commands, send-a-link and type-on-phone inputs.
 - 🖥️ **Mirror the phone** — one click mirrors the phone on the desktop with
   **scrcpy** over Wi-Fi, no cable: the widget discovers the wireless-debugging
   endpoint, reconnects adb and launches scrcpy detached. The button flips to
@@ -48,7 +48,7 @@ system & media cards and power controls — all in one popup.
 
 ## 🆕 What's new
 
-- **Phone mirroring** — a *Mirror phone screen* button in the phone panel runs scrcpy over Wi-Fi through `contents/code/scrcpy.sh`, and `install.sh` now installs scrcpy + adb for you (asking for the sudo password up front).
+- **Phone mirroring** — a **Mirror** action in the phone panel's ACTIONS row runs scrcpy over Wi-Fi through `contents/code/scrcpy.sh` (it flips to *Stop* while mirroring); `install.sh` now installs scrcpy + adb for you, asking for the sudo password up front.
 - **Phone panel refresh** — connection dot, tap-to-switch device picker, signal bars, offline banner, section headers, and a runnable phone-commands list. Also fixes the collapsible sections (Notifications / Touchpad) that never expanded.
 - **Recently Used** category that tracks your last launches (`~/.local/state/custom-start-menu/recent`).
 - **Right-click context menu** on every tile: Launch · Pin/Unpin · Open Containing Folder · Copy Command.

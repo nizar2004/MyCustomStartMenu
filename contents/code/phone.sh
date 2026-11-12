@@ -5,7 +5,7 @@
 #
 # commands:
 #   poll <id>                   panel payload: devices --- battery ---
-#                               connectivity --- media
+#                               connectivity
 #   ring <id>                   find my phone (ring the device)
 #   ping <id> [msg]             send a ping notification
 #   refresh                     re-scan for devices on the network
@@ -57,31 +57,6 @@ device_list() {
     done
 }
 
-# --------------------------------------------------------- mpris helper ---
-mpris_svc() {
-    busctl --user list 2>/dev/null | \
-        grep -oE 'org\.mpris\.MediaPlayer2\.kdeconnect[A-Za-z0-9_.-]*' | head -1
-}
-
-media_line() {
-    SVC=$(mpris_svc)
-    if [ -z "$SVC" ]; then
-        printf 'none%s%s%s%s%s\n' "$SEP" "$SEP" "$SEP" "$SEP"
-        return
-    fi
-    ST=$(qdbus6 "$SVC" /org/mpris/MediaPlayer2 \
-         org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null)
-    MD=$(qdbus6 "$SVC" /org/mpris/MediaPlayer2 \
-         org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player Metadata 2>/dev/null)
-    TITLE=$(printf '%s' "$MD" | sed -n 's/^xesam:title: //p')
-    ARTIST=$(printf '%s' "$MD" | sed -n 's/^xesam:artist: //p')
-    ART=$(printf '%s' "$MD" | sed -n 's/^mpris:artUrl: //p')
-    IDENT=$(qdbus6 "$SVC" /org/mpris/MediaPlayer2 \
-            org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Identity 2>/dev/null)
-    [ -n "$ST" ] || ST="none"
-    printf '%s%s%s%s%s%s%s%s%s\n' "$ST" "$SEP" "$TITLE" "$SEP" "$ARTIST" "$SEP" "$ART" "$SEP" "$IDENT"
-}
-
 battery_line() {
     id="$1"
     P=/modules/kdeconnect/devices/$id/battery
@@ -112,8 +87,6 @@ case "$1" in
         battery_line "$2"
         printf -- '---\n'
         connectivity_line "$2"
-        printf -- '---\n'
-        media_line
         ;;
     ring)
         [ -n "$2" ] && kdeconnect-cli --ring -d "$2" >/dev/null 2>&1

@@ -47,7 +47,6 @@ QtObject {
     property string phoneId: ""              // selected device id
     property int phoneBattery: -1
     property bool phoneCharging: false
-    property var phoneMedia: null            // {status, title, artist, art, identity}
     property int phoneSignal: -1             // cellular strength 0-4, -1 unknown
     property string phoneNetType: ""         // "LTE", "5G", …
     property var phoneNotifs: []             // [{id, app, title, dismissable}]
@@ -128,7 +127,7 @@ QtObject {
         }
         if (sel && sel.id !== phoneId) {
             phoneId = sel.id;
-            refreshPhone();   // re-point battery/media polling at this device
+            refreshPhone();   // re-point battery/connectivity polling at this device
             return;
         }
 
@@ -143,17 +142,6 @@ QtObject {
         var s = parseInt(cl[0]);
         phoneSignal = isNaN(s) ? -1 : s;
         phoneNetType = cl[1] || "";
-
-        // --- media ---
-        var ml = (parts[3] || "").trim().split("\u001f");
-        if (ml[0] === "" || ml[0] === "none") {
-            phoneMedia = null;
-        } else {
-            phoneMedia = {
-                status: ml[0], title: ml[1], artist: ml[2],
-                art: ml[3], identity: ml[4]
-            };
-        }
     }
 
     // fetch the phone's notifications (one-shot, refreshed on demand)

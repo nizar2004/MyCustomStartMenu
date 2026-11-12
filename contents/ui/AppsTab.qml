@@ -36,7 +36,6 @@ Item {
     property bool detailedInfo: false
     property bool phoneMode: false       // right panel switched to phone control
     property bool notifOpen: false       // phone notifications list expanded
-    property bool touchpadOn: false      // virtual touchpad (mouse control) open
     property bool commandsOpen: false    // phone "run commands" list expanded
 
     // tiny toast for action feedback inside the phone panel
@@ -650,7 +649,6 @@ Item {
             appsTab.detailedInfo = false;
             appsTab.phoneMode = false;
             appsTab.notifOpen = false;
-            appsTab.touchpadOn = false;
             appsTab.commandsOpen = false;
             DashState.closePhonePoll();
             DashState.closePhoneNotifs();

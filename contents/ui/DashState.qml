@@ -228,13 +228,11 @@ QtObject {
     readonly property url infoUrl: Qt.resolvedUrl("../code/sysinfo.sh")
     readonly property url favsUrl: Qt.resolvedUrl("../code/readfavs.sh")
     readonly property url osUrl: Qt.resolvedUrl("../code/osid.sh")
-    readonly property url recentUrl: Qt.resolvedUrl("../code/recent.sh")
     readonly property string sysCmd: "sh " + shUrl(sysUrl)
     readonly property string scanCmd: "sh " + shUrl(scanUrl)
     readonly property string infoCmd: "sh " + shUrl(infoUrl)
     readonly property string favsCmd: "sh " + shUrl(favsUrl)
     readonly property string osCmd: "sh " + shUrl(osUrl)
-    readonly property string recentCmd: "sh " + shUrl(recentUrl) + " list"
 
     // -------- running distro (panel icon + tooltips) --------
     // osid.sh reports "ID<TAB>Pretty Name" from /etc/os-release; the widget
@@ -344,11 +342,6 @@ QtObject {
                 disconnectSource(sourceName);
                 return;
             }
-            if (base === state.recentCmd) {
-                state.parseRecent(out);
-                disconnectSource(sourceName);
-                return;
-            }
             if (base === state.scrcpyStatusCmd) {
                 state.mirroring = String(out).replace(/\s+$/, "") === "running";
                 disconnectSource(sourceName);
@@ -393,7 +386,6 @@ QtObject {
         readFavorites();
         readSysInfo();
         runOnce(osCmd);          // detect the distro once for the panel icon
-        readRecent();
     }
 
     // The desktop-file scan is comparatively expensive, and the widget
@@ -412,43 +404,6 @@ QtObject {
 
     function readFavorites() {
         runOnce(favsCmd);
-    }
-
-    // ------------------------------------------------------------------
-    // Recently used apps (Kickoff-style history)
-    // ------------------------------------------------------------------
-    property var recentIds: []          // desktop ids, most recent first
-
-    function readRecent() {
-        runOnce(recentCmd);
-    }
-
-    function parseRecent(text) {
-        var out = [];
-        var lines = String(text).split("\n");
-        for (var i = 0; i < lines.length; i++) {
-            var id = lines[i].trim();
-            if (id !== "" && out.indexOf(id) < 0) { out.push(id); }
-        }
-        recentIds = out;
-    }
-
-    // called from launch(): move the id to the top of the history, both in
-    // memory (the UI updates instantly) and on disk (persists across sessions)
-    function noteLaunch(id) {
-        if (id === undefined || id === null || String(id) === "") { return; }
-        id = String(id);
-        var next = [id];
-        for (var i = 0; i < recentIds.length && next.length < 12; i++) {
-            if (recentIds[i] !== id) { next.push(recentIds[i]); }
-        }
-        recentIds = next;
-        runOnce("sh " + shUrl(recentUrl) + " add " + sh(id));
-    }
-
-    function clearRecent() {
-        recentIds = [];
-        runOnce("sh " + shUrl(recentUrl) + " clear");
     }
 
     function readSysInfo() {
@@ -717,7 +672,6 @@ QtObject {
         // same shape as this widget's other engine commands.
         runOnce("sh " + shUrl(Qt.resolvedUrl("../code/launchapp.sh"))
               + " " + sh(String(path)) + " " + sh(String(id)));
-        noteLaunch(id);
         requestClose();
     }
 

@@ -647,7 +647,7 @@ ColumnLayout {
 
         Repeater {
             model: [
-                { lbl: "Alerts",   icn: "notifications",   act: "notifs",   tip: "Read the phone's notifications" },
+                { lbl: "Notifications", icn: "notifications", act: "notifs", tip: "Read the phone's notifications" },
                 { lbl: "Messages", icn: "dialog-messages", act: "messages", tip: "Read & send SMS (KDE Connect SMS)" }
             ]
 

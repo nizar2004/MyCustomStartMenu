@@ -520,9 +520,6 @@ Item {
             { key: "all", name: "All Apps", icon: "view-grid" },
             { key: "pinned", name: "Pinned", icon: "starred" }
         ];
-        if (DashState.recentIds.length > 0) {
-            out.push({ key: "recent", name: "Recently Used", icon: "document-open-recent" });
-        }
         var cats = {};
         var m = DashState.appsModel;
         for (var i = 0; i < m.count; i++) {
@@ -559,8 +556,7 @@ Item {
                 if (!hit) { continue; }
             } else {
                 if (filter === "pinned" && !app.pinned) { continue; }
-                if (filter !== "all" && filter !== "pinned" && filter !== "recent"
-                        && app.cat !== filter) { continue; }
+                if (filter !== "all" && filter !== "pinned" && app.cat !== filter) { continue; }
             }
             vis.push(app);
         }
@@ -573,15 +569,6 @@ Item {
                 return ia - ib;
             });
         }
-        // Recently Used follows the launch history, newest first
-        if (q === "" && filter === "recent") {
-            var rorder = DashState.recentIds;
-            vis.sort(function(a, b) {
-                var ia = rorder.indexOf(a.id); if (ia < 0) { ia = 999999; }
-                var ib = rorder.indexOf(b.id); if (ib < 0) { ib = 999999; }
-                return ia - ib;
-            });
-        }
         visibleApps = vis;
 
         // ----- sections -----
@@ -589,8 +576,6 @@ Item {
         var secs = [];
         if (q === "" && filter === "pinned") {
             secs = [{ name: "Pinned", icon: "starred", apps: vis }];
-        } else if (q === "" && filter === "recent") {
-            secs = [{ name: "Recently Used", icon: "document-open-recent", apps: vis }];
         } else {
             var map = {};
             for (var s = 0; s < vis.length; s++) {
@@ -640,7 +625,6 @@ Item {
         target: DashState
         function onAppListChanged() { appsTab.refresh() }
         function onPinnedIdsChanged() { appsTab.refresh() }
-        function onRecentIdsChanged() { appsTab.refresh() }
         function onResetView() {
             appsTab.filter = Plasmoid.configuration.defaultCategory !== ""
                              ? Plasmoid.configuration.defaultCategory : "all";
@@ -1013,18 +997,14 @@ Item {
                         Item { height: 12 }
                         Kirigami.Icon {
                             Layout.alignment: Qt.AlignHCenter
-                            source: appsTab.filter === "pinned" ? "starred"
-                                  : appsTab.filter === "recent" ? "document-open-recent"
-                                  : "edit-find"
+                            source: appsTab.filter === "pinned" ? "starred" : "edit-find"
                             implicitWidth: 42
                             implicitHeight: 42
                             opacity: 0.35
                         }
                         Text {
                             Layout.alignment: Qt.AlignHCenter
-                            text: appsTab.filter === "pinned" ? "Nothing pinned yet"
-                                : appsTab.filter === "recent" ? "Nothing here yet"
-                                : "No apps found"
+                            text: appsTab.filter === "pinned" ? "Nothing pinned yet" : "No apps found"
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
                             color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
@@ -1033,8 +1013,6 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             text: appsTab.filter === "pinned"
                                   ? "Open All Apps, hover any app and tap the ☆ to pin it here"
-                                  : appsTab.filter === "recent"
-                                  ? "Apps you launch will show up here"
                                   : "Try a different search term"
                             font.pixelSize: 11
                             color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
@@ -1097,21 +1075,6 @@ Item {
                                     width: parent.width - x - 22
                                     height: 1
                                     color: Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                                }
-                                // clear the "Recently Used" history in place
-                                PC3.ToolButton {
-                                    visible: section.modelData.name === "Recently Used"
-                                             && appsTab.search === ""
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    implicitWidth: 22
-                                    implicitHeight: 22
-                                    icon.name: "edit-clear-all"
-                                    display: QQC2.AbstractButton.IconOnly
-                                    onClicked: DashState.clearRecent()
-                                    QQC2.ToolTip {
-                                        text: "Clear recently used"
-                                        delay: 400
-                                    }
                                 }
                             }
 

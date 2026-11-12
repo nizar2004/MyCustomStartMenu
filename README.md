@@ -4,8 +4,8 @@
 
 **A fast, keyboard-first app dashboard for KDE Plasma 6.**
 
-Search, pinned & recent apps, categories, drag-and-drop, a phone panel,
-system & media cards and power controls — all in one popup.
+Search, pinned apps, categories, drag-and-drop, a phone panel, system & media
+cards and power controls — all in one popup.
 
 ![KDE Plasma 6](https://img.shields.io/badge/KDE-Plasma%206-1d99f3?logo=kde&logoColor=white)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](metadata.json)
@@ -21,9 +21,7 @@ system & media cards and power controls — all in one popup.
   **Enter** launches it.
 - 📌 **Pinned apps** — press and hold a tile to drag & reorder it; the order is
   saved to your Plasma favourites (`klauncherrc`).
-- 🕘 **Recently used** — its own rail category, remembering your last launches
-  across sessions.
-- 🗂️ **Category rail** — All Apps, Pinned, Recently Used and every menu
+- 🗂️ **Category rail** — All Apps, Pinned and every menu
   category, one click away, with bundled SVG icons.
 - 🖱️ **Tile context menu** — right-click any app to launch it, pin/unpin it,
   open its containing folder, or copy its command.
@@ -54,7 +52,6 @@ system & media cards and power controls — all in one popup.
 
 - **Phone mirroring** — a **Mirror** action in the phone panel's ACTIONS row runs scrcpy over Wi-Fi through `contents/code/scrcpy.sh` (it flips to *Stop* while mirroring); `install.sh` now installs scrcpy + adb for you, asking for the sudo password up front.
 - **Phone panel rework** — actions are grouped into **ACTIONS / FROM PHONE / SEND TO PHONE**, with clearer icons (ringing bell, paper plane, monitor, bell, speech bubble, Android folder). The remote-touchpad and phone-media controls were dropped and *Run commands* was replaced by **Messages** (opens the KDE Connect SMS app). The **Clipboard** action now uses the daemon's clipboard plugin (the applet's own call) instead of `kdeconnect-cli`, which often failed to read the clipboard under Wayland. Also fixes the collapsible sections that never expanded.
-- **Recently Used** category that tracks your last launches (`~/.local/state/custom-start-menu/recent`).
 - **Right-click context menu** on every tile: Launch · Pin/Unpin · Open Containing Folder · Copy Command.
 - **`Tab` / `Shift+Tab`** to cycle categories and **`PageUp` / `PageDown`** to page through apps.
 - **Lower idle cost** — the 1.5 s system poll drops to a slow idle tick when the popup is closed, and the app scan is cached.
@@ -124,7 +121,6 @@ contents/
 │   ├── sysmon.sh      CPU / RAM / disk / network
 │   ├── sysinfo.sh     static system info
 │   ├── launchapp.sh   Kickoff-style launching via systemd-run
-│   ├── recent.sh      recently-used history
 │   ├── phone.sh       KDE Connect bridge
 │   ├── scrcpy.sh      Wi-Fi phone mirroring (scrcpy)
 │   └── readfavs.sh / osid.sh

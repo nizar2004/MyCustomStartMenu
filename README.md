@@ -19,10 +19,12 @@ cards and power controls — all in one popup.
 - 🔍 **Instant search** — multi-word matching across name, GenericName,
   keywords, command and category. The first result is selected for you, so
   **Enter** launches it.
-- 📌 **Pinned apps** — press and hold a tile to drag & reorder it; the order is
-  saved to your Plasma favourites (`klauncherrc`).
-- 🗂️ **Category rail** — All Apps, Pinned and every menu
-  category, one click away, with bundled SVG icons.
+- 📌 **Overview tab** — an icon-only grid of your pinned apps (press and hold a
+  tile to drag & reorder it; the order is saved to your Plasma favourites in
+  `klauncherrc`), with a **Recently Used** list below it showing the apps you
+  launched last, each with its one-line description.
+- 🗂️ **Category rail** — Pinned, All Apps and every menu category, one click
+  away, with bundled SVG icons.
 - 🖱️ **Tile context menu** — right-click any app to launch it, pin/unpin it,
   open its containing folder, or copy its command.
 - 🧲 **Drag & drop** — drag any app out of the menu onto the taskbar, the

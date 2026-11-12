@@ -215,7 +215,7 @@ Item {
     function pageSel(dir) {
         if (sections.length === 0) { return; }
         if (selSection < 0) { setSel(0, 0); return; }
-        var rows = Math.max(1, Math.floor(scroller.height / 102));
+        var rows = Math.max(1, Math.floor(scroller.height / (overviewTileH + 2)));
         var step = Math.max(1, gridColsNow() * rows);
         for (var i = 0; i < step; i++) {
             moveSel(dir > 0 ? "down" : "up");
@@ -253,6 +253,10 @@ Item {
     // KDE's application launcher grid. Releasing inside the grid commits
     // the new order; while the pointer is outside the grid every tile
     // springs back to its original slot (Kickoff's DropArea "undo on exit").
+    // Height of an Overview (pinned) tile: icon-only, so shorter than the
+    // labelled grid tiles. The pin-drag maths below must use the same value.
+    readonly property int overviewTileH: 78
+
     property bool pinDragActive: false
     property string pinDragId: ""
     property string pinDragName: ""
@@ -280,12 +284,12 @@ Item {
     }
 
     // top-left corner of slot `idx` using the same pitch as the Flow
-    // (tile width + 2 spacing, 102 per row)
+    // (tile width + 2 spacing, overviewTileH + 2 per row)
     function pinSlotPos(idx) {
         var cols = gridColsNow();
         var tw = gridTileWNow();
         return Qt.point((idx % cols) * (tw + 2),
-                        Math.floor(idx / cols) * 102);
+                        Math.floor(idx / cols) * (overviewTileH + 2));
     }
 
     // displacement for tile `myIndex` while a drag is live — this is what
@@ -344,7 +348,7 @@ Item {
         if (i < 0) { return; }
         var p = tile.mapToItem(scroller.contentItem, 0, 0);
         // y of the grid's first row (the section header sits above it)
-        pinBaseY = p.y - Math.floor(i / gridColsNow()) * 102;
+        pinBaseY = p.y - Math.floor(i / gridColsNow()) * (overviewTileH + 2);
         pinDragId = tile.modelData.id;
         pinDragName = tile.modelData.name;
         pinDragIcon = tile.modelData.icon;
@@ -371,7 +375,7 @@ Item {
         var n = pinCount();
         if (n < 1) { return; }
         var cols = gridColsNow();
-        var tw = gridTileWNow(), th = 100;
+        var tw = gridTileWNow(), th = overviewTileH;
         var idx = -1;
         var maxX = cols * (tw + 2) - 2;
         var maxY = pinBaseY + Math.ceil(n / cols) * (th + 2);
@@ -516,9 +520,13 @@ Item {
 
     function doRefresh() {
         // ----- rail model: All Apps first, then Pinned, then categories -----
+        // rail order: Pinned first, then All Apps, then the categories.
+        // NOTE: the chips' `icon` keys are looked up in customCatIcons below
+        // (view-grid → all-apps.svg for Pinned, apps-grid → the 2×2 grid SVG
+        // for All Apps).
         var out = [
-            { key: "all", name: "All Apps", icon: "view-grid" },
-            { key: "pinned", name: "Pinned", icon: "starred" }
+            { key: "pinned", name: "Overview", icon: "view-grid" },
+            { key: "all", name: "All Apps", icon: "apps-grid" }
         ];
         var cats = {};
         var m = DashState.appsModel;
@@ -572,10 +580,27 @@ Item {
         visibleApps = vis;
 
         // ----- sections -----
-        // pinned → one section; search & "all" → grouped by category
+        // Overview (pinned) → an icon-only grid on top plus a "Recently Used"
+        // list below; search & "all" → grouped by category.
         var secs = [];
         if (q === "" && filter === "pinned") {
-            secs = [{ name: "Pinned", icon: "starred", apps: vis }];
+            secs = [{ name: "Pinned", icon: "starred", apps: vis, compact: true }];
+
+            // recently launched apps, newest first, resolved against the model
+            var recentApps = [];
+            var rids = DashState.recentIds;
+            for (var ri = 0; ri < rids.length; ri++) {
+                for (var ci = 0; ci < m.count; ci++) {
+                    var crow = m.get(ci);
+                    if (crow.id === rids[ri]) { recentApps.push(crow); break; }
+                }
+            }
+            if (recentApps.length > 0) {
+                secs.push({
+                    name: "Recently Used", icon: "document-open-recent",
+                    apps: recentApps, type: "list"
+                });
+            }
         } else {
             var map = {};
             for (var s = 0; s < vis.length; s++) {
@@ -625,6 +650,7 @@ Item {
         target: DashState
         function onAppListChanged() { appsTab.refresh() }
         function onPinnedIdsChanged() { appsTab.refresh() }
+        function onRecentIdsChanged() { appsTab.refresh() }
         function onResetView() {
             appsTab.filter = Plasmoid.configuration.defaultCategory !== ""
                              ? Plasmoid.configuration.defaultCategory : "all";
@@ -668,7 +694,8 @@ Item {
         "applications-education": "education-cap.svg",
         "applications-science": "science-flask.svg",
         "starred": "pinned-pin.svg",
-        "view-grid": "all-apps.svg"
+        "view-grid": "all-apps.svg",
+        "apps-grid": "apps-grid.svg"
     })
 
     function catIconSource(name) {
@@ -1035,6 +1062,11 @@ Item {
                             readonly property int gridTileWidth:
                                 Math.floor((width - 2 * (gridCols - 1)) / gridCols)
 
+                            // "list" sections (Recently Used) render rows;
+                            // "compact" sections (Overview) show icon-only tiles
+                            readonly property bool isList: section.modelData.type === "list"
+                            readonly property bool compact: section.modelData.compact === true
+
                             Row {
                                 width: parent.width
                                 height: 28
@@ -1078,7 +1110,20 @@ Item {
                                 }
                             }
 
+                            // nothing pinned yet → short hint (Overview tab)
+                            Text {
+                                visible: section.compact && !section.isList
+                                         && section.modelData.apps.length === 0
+                                width: parent.width
+                                text: "Nothing pinned yet — open All Apps, hover an app "
+                                      + "and tap the ☆ to pin it here"
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                                color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
+                            }
+
                             Flow {
+                                visible: !section.isList
                                 width: parent.width
                                 spacing: 2
 
@@ -1088,6 +1133,23 @@ Item {
                                     delegate: AppTile {
                                         tab: appsTab
                                         tileW: section.gridTileWidth
+                                        compact: section.compact
+                                        tileH: section.compact ? appsTab.overviewTileH : 100
+                                    }
+                                }
+                            }
+
+                            // list body (Recently Used)
+                            Column {
+                                visible: section.isList
+                                width: parent.width
+                                spacing: 2
+
+                                Repeater {
+                                    model: section.modelData.apps
+
+                                    delegate: RecentRow {
+                                        tab: appsTab
                                     }
                                 }
                             }

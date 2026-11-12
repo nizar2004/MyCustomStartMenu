@@ -13,6 +13,9 @@ Item {
     property Item tab: null
 
     property int tileW: 92
+    property int tileH: 100
+    // Overview tab: icon-only tiles (no name label) in a shorter cell
+    property bool compact: false
 
     // selected when the keyboard selector points at this app's id
     readonly property bool keySel:
@@ -34,7 +37,7 @@ Item {
         "file://" + encodeURI(tile.modelData.path || "")
 
     width: tileW
-    height: 100
+    height: tileH
 
     // Kickoff-style live shuffle: while a pinned drag is active, every
     // tile translates to open the slot under the pointer — the dragged
@@ -153,11 +156,12 @@ Item {
         Kirigami.Icon {
             anchors.horizontalCenter: parent.horizontalCenter
             source: tile.modelData.icon
-            implicitWidth: 47
-            implicitHeight: 47
+            implicitWidth: tile.compact ? 48 : 47
+            implicitHeight: tile.compact ? 48 : 47
         }
 
         Text {
+            visible: !tile.compact
             width: parent.width
             height: 30
             text: tile.modelData.name

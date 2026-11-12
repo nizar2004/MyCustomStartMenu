@@ -4,7 +4,6 @@ import QtQuick.Controls as QQC2
 import QtQuick.Effects
 import QtQuick.Window
 import org.kde.plasma.plasmoid
-import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PC3
 import org.kde.plasma.extras as PlasmaExtras
 import org.kde.plasma.private.mpris as Mpris
@@ -36,7 +35,6 @@ Item {
     property bool detailedInfo: false
     property bool phoneMode: false       // right panel switched to phone control
     property bool notifOpen: false       // phone notifications list expanded
-    property bool commandsOpen: false    // phone "run commands" list expanded
 
     // tiny toast for action feedback inside the phone panel
     property string _phoneToast: ""
@@ -649,10 +647,8 @@ Item {
             appsTab.detailedInfo = false;
             appsTab.phoneMode = false;
             appsTab.notifOpen = false;
-            appsTab.commandsOpen = false;
             DashState.closePhonePoll();
             DashState.closePhoneNotifs();
-            DashState.closePhoneCommands();
             appsTab.clearSel();
             searchField.text = "";
             scroller.contentY = 0;
@@ -1876,7 +1872,7 @@ Item {
 
                 Kirigami.Icon {
                     anchors.centerIn: parent
-                    source: "smartphone"
+                    source: "phone"
                     isMask: true
                     implicitWidth: 13
                     implicitHeight: 13

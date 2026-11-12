@@ -61,7 +61,6 @@ PlasmoidItem {
             // no reason to keep polling the phone while hidden
             DashState.closePhonePoll();
             DashState.closePhoneNotifs();
-            DashState.closePhoneCommands();
         }
     }
 

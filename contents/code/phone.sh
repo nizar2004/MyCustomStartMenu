@@ -15,15 +15,10 @@
 #   clipboard <id>              send the desktop clipboard to the phone
 #   browse <id>                 mount the phone filesystem (SFTP) and open it
 #   type <id> <text>            type text into the phone (remote keyboard)
-#   cursor <id> <dx> <dy>       move the phone's mouse pointer
-#   click <id> <single|double|middle|right>   click on the phone
-#   scroll <id> <dy>            scroll on the phone
 #   notif <id>                  list the phone's notifications (raw lines)
 #   notifaction <id> <k> <a>    trigger an action on a notification
 #   sms <id> <number> <msg>     send an SMS from the phone
-#   commands <id>               list the phone's registered commands
-#   commandrun <id> <cmdid>     run a registered command on the phone
-#   notifycommands <id>         desktop notification with the command list
+#   messages <id>               open the KDE Connect SMS app for the device
 #   pair <id> / unpair <id>     pairing management
 #   encryption <id>             show the connection's encryption info
 
@@ -110,38 +105,24 @@ case "$1" in
         F=$(kdialog --getopenfilename "$HOME" 2>/dev/null)
         [ -n "$F" ] && kdeconnect-cli -d "$id" --share "$F" >/dev/null 2>&1
         ;;
-    click)
-        case "$3" in
-            single|double|middle|right) K="${3}click" ;;
-            *) K="singleclick" ;;
-        esac
-        busctl --user call org.kde.kdeconnect \
-            "/modules/kdeconnect/devices/$2/remotecontrol" \
-            org.kde.kdeconnect.device.remotecontrol sendCommand \
-            a{sv} 1 "$K" b true >/dev/null 2>&1
-        ;;
-    scroll)
-        [ -n "$2" ] && [ -n "$3" ] && busctl --user call org.kde.kdeconnect \
-            "/modules/kdeconnect/devices/$2/remotecontrol" \
-            org.kde.kdeconnect.device.remotecontrol sendCommand \
-            a{sv} 3 scroll b true dx d 0 dy d "$3" >/dev/null 2>&1
-        ;;
-    notifycommands)
-        [ -n "$2" ] || exit 0
-        L=$(kdeconnect-cli --list-commands -d "$2" 2>/dev/null)
-        if [ -z "$L" ]; then
-            L="No commands found.\nEnable the 'Run commands' plugin for this PC\nin the KDE Connect app on the phone."
-        fi
-        command -v notify-send >/dev/null 2>&1 && \
-            notify-send -a "Custom Start Menu" -i "smartphone" "Phone commands" "$L" &
-        ;;
     sharetext)
         [ -n "$2" ] && [ -n "$3" ] && qdbus6 org.kde.kdeconnect \
             "/modules/kdeconnect/devices/$2/share" \
             org.kde.kdeconnect.device.share.shareText "$3" >/dev/null 2>&1
         ;;
     clipboard)
-        [ -n "$2" ] && kdeconnect-cli --send-clipboard -d "$2" >/dev/null 2>&1
+        # Send the desktop clipboard through the daemon's clipboard plugin —
+        # the same call the KDE Connect applet makes. kdeconnect-cli is only a
+        # fallback: on Wayland it often cannot read the clipboard, which is
+        # why this button appeared to do nothing.
+        id="$2"
+        [ -n "$id" ] || exit 0
+        if busctl --user call org.kde.kdeconnect \
+              "/modules/kdeconnect/devices/$id/clipboard" \
+              org.kde.kdeconnect.device.clipboard sendClipboard >/dev/null 2>&1; then
+            exit 0
+        fi
+        kdeconnect-cli --send-clipboard -d "$id" >/dev/null 2>&1
         ;;
     browse)
         id="$2"
@@ -168,11 +149,6 @@ case "$1" in
         [ -n "$2" ] && [ -n "$3" ] && qdbus6 org.kde.kdeconnect \
             "/modules/kdeconnect/devices/$2/remotekeyboard" \
             org.kde.kdeconnect.device.remotekeyboard.sendKeyPress "$3" >/dev/null 2>&1
-        ;;
-    cursor)
-        [ -n "$2" ] && [ -n "$3" ] && [ -n "$4" ] && qdbus6 org.kde.kdeconnect \
-            "/modules/kdeconnect/devices/$2/remotecontrol" \
-            org.kde.kdeconnect.device.remotecontrol.moveCursor "$3" "$4" >/dev/null 2>&1
         ;;
     notif)
         # two-step listing, exactly like kdeconnect-cli: fetch the active
@@ -215,12 +191,12 @@ case "$1" in
         [ -n "$2" ] && [ -n "$3" ] && [ -n "$4" ] && \
             kdeconnect-cli --send-sms "$4" --destination "$3" -d "$2" >/dev/null 2>&1
         ;;
-    commands)
-        [ -n "$2" ] && kdeconnect-cli --list-commands -d "$2" 2>/dev/null
-        ;;
-    commandrun)
-        [ -n "$2" ] && [ -n "$3" ] && \
-            kdeconnect-cli --execute-command "$3" -d "$2" >/dev/null 2>&1
+    messages)
+        # Open the official KDE Connect SMS app for this device — it shows the
+        # phone's SMS conversations and lets you reply.
+        id="$2"
+        [ -n "$id" ] || exit 0
+        ( setsid kdeconnect-sms --device "$id" >/dev/null 2>&1 </dev/null & )
         ;;
     pair|unpair)
         [ -n "$2" ] && kdeconnect-cli --"$1" -d "$2" >/dev/null 2>&1

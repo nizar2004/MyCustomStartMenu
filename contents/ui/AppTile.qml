@@ -14,10 +14,6 @@ Item {
 
     property int tileW: 92
 
-    // drag-to-reorder is active only inside the Pinned tab
-    readonly property bool reorderable:
-        tab.filter === "pinned" && tab.search === ""
-
     // selected when the keyboard selector points at this app's id
     readonly property bool keySel:
         tab.selAppId !== "" && tile.modelData.id === tab.selAppId

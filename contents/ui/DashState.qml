@@ -15,8 +15,6 @@ QtObject {
         disk: 0, diskUsed: 0, diskTotal: 0,
         down: 0, up: 0, uptime: 0, temp: 0, battery: -1
     })
-    property var cpuHist: []
-    property var netHist: []
     property var _prevCpu: null
     property var _prevNet: null
     property real _prevTime: 0
@@ -50,10 +48,8 @@ QtObject {
     property int phoneSignal: -1             // cellular strength 0-4, -1 unknown
     property string phoneNetType: ""         // "LTE", "5G", …
     property var phoneNotifs: []             // [{id, app, title, dismissable}]
-    property var phoneCommands: []           // [{id, name}] registered on the phone
     property string _phoneSrc: ""            // connected poll source name
     property string _phoneNotifSrc: ""       // one-shot notifications source
-    property string _phoneCmdSrc: ""         // one-shot commands source
     property int _phoneEpoch: 0              // invalidates deferred poll changes
 
     readonly property url phoneUrl: Qt.resolvedUrl("../code/phone.sh")
@@ -165,44 +161,7 @@ QtObject {
             return;
         }
         phoneId = String(id);
-        closePhoneCommands();
         refreshPhone();
-    }
-
-    // fetch the phone's registered "Run commands" entries (one-shot)
-    function fetchPhoneCommands() {
-        closePhoneCommands();
-        if (phoneId === "") { return; }
-        _phoneCmdSrc = "sh " + shUrl(phoneUrl) + " commands " + sh(phoneId);
-        run.connectSource(_phoneCmdSrc);
-    }
-
-    function closePhoneCommands() {
-        if (_phoneCmdSrc !== "") {
-            run.disconnectSource(_phoneCmdSrc);
-            _phoneCmdSrc = "";
-        }
-    }
-
-    function parsePhoneCommands(text) {
-        var out = [];
-        var lines = String(text).split("\n");
-        for (var i = 0; i < lines.length; i++) {
-            var l = lines[i].replace(/^\s+|\s+$/g, "");
-            if (l === "") { continue; }
-            l = l.replace(/^-\s*/, "");       // "- <id>: <name>"
-            var idx = l.indexOf(": ");
-            if (idx > 0) {
-                out.push({ id: l.slice(0, idx), name: l.slice(idx + 2) });
-            } else {
-                out.push({ id: l, name: l });
-            }
-        }
-        phoneCommands = out;
-        if (_phoneCmdSrc !== "") {
-            run.disconnectSource(_phoneCmdSrc);   // one-shot, like the app scan
-            _phoneCmdSrc = "";
-        }
     }
 
     // launch the KDE Connect settings app (pairing / enabling plugins)
@@ -338,13 +297,6 @@ QtObject {
         run.connectSource(sysCmd);
     }
 
-    function stopSysPoll() {
-        if (!_sysPollActive) { return; }
-        _sysPollActive = false;
-        _sysPollInterval = 0;
-        run.disconnectSource(sysCmd);
-    }
-
     // called from the popup's expandedChanged: fast while open, slow idle
     function setSysPollForeground(fg) {
         sysPollForeground = fg;
@@ -376,10 +328,6 @@ QtObject {
             var base = String(sourceName).split(" #")[0];
             if (state._phoneNotifSrc !== "" && base === state._phoneNotifSrc) {
                 state.parsePhoneNotifs(out);     // one-shot: parsed, then closed
-                return;
-            }
-            if (state._phoneCmdSrc !== "" && base === state._phoneCmdSrc) {
-                state.parsePhoneCommands(out);   // one-shot: parsed, then closed
                 return;
             }
             if (base === state.sysCmd) {
@@ -618,14 +566,6 @@ QtObject {
             down: down, up: upS, uptime: up, temp: temp, battery: bat,
             cpuTemp: cpuTemp, gpus: gpus
         };
-
-        var ch = cpuHist.concat([cpu]);
-        if (ch.length > 90) { ch = ch.slice(ch.length - 90); }
-        cpuHist = ch;
-
-        var nh = netHist.concat([{ d: down, u: upS }]);
-        if (nh.length > 90) { nh = nh.slice(nh.length - 90); }
-        netHist = nh;
     }
 
     // ------------------------------------------------------------------

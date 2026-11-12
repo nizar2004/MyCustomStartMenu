@@ -1,13 +1,13 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
-import QtQuick.Effects
 import org.kde.plasma.components as PC3
 import org.kde.kirigami as Kirigami
 
 // Phone panel (KDE Connect): device/battery card, actions (ring, ping,
-// screen mirror), send-to-phone inputs, notifications and phone commands.
-// Extracted from AppsTab; `tab` is the AppsTab instance.
+// screen mirror), things you read from the phone (notifications, SMS),
+// send-to-phone inputs and the send/share row. Extracted from AppsTab;
+// `tab` is the AppsTab instance.
 ColumnLayout {
     id: panel
     property Item tab: null
@@ -47,11 +47,9 @@ ColumnLayout {
             onClicked: {
                 panel.tab.phoneMode = false;
                 panel.tab.notifOpen = false;
-                panel.tab.commandsOpen = false;
                 panel.deviceListOpen = false;
                 DashState.closePhonePoll();
                 DashState.closePhoneNotifs();
-                DashState.closePhoneCommands();
             }
             QQC2.ToolTip { text: "Back"; delay: 400 }
         }
@@ -221,7 +219,6 @@ ColumnLayout {
                     onTapped: {
                         DashState.selectPhone(devRow.modelData.id);
                         panel.deviceListOpen = false;
-                        panel.tab.commandsOpen = false;
                         panel.tab.notifOpen = false;
                     }
                 }
@@ -459,11 +456,11 @@ ColumnLayout {
                 }
                 Kirigami.Icon {
                     anchors.centerIn: parent
-                    source: "smartphone"
+                    source: "phone"
                     isMask: true
                     color: panel.tab.accent
-                    implicitWidth: 20
-                    implicitHeight: 20
+                    implicitWidth: 22
+                    implicitHeight: 22
                 }
             }
 
@@ -588,13 +585,12 @@ ColumnLayout {
         }
     }
 
+    // ================= actions that make the phone do something ==========
     PhoneLabel {
         visible: panel.hasDevice
         text2: "ACTIONS"
     }
 
-    // actions (hidden entirely until a device is paired). "Mirror" drives
-    // scrcpy over Wi-Fi and flips to "Stop" while a mirror is up.
     RowLayout {
         visible: panel.hasDevice
         Layout.fillWidth: true
@@ -602,25 +598,21 @@ ColumnLayout {
 
         Repeater {
             model: [
-                { lbl: "Ring",   icn: "bell",                             act: "ring",   tip: "Ring the phone"          },
-                { lbl: "Ping",   icn: "preferences-desktop-notification", act: "ping",   tip: "Ping the phone"          },
-                { lbl: "Mirror", icn: "smartphone",                       act: "mirror", tip: "Mirror the screen (scrcpy over Wi-Fi)" },
-                { lbl: "Alerts", icn: "dialog-information",               act: "notifs", tip: "Phone notifications"     }
+                { lbl: "Ring",   icn: "notification-active",         act: "ring",   tip: "Ring the phone" },
+                { lbl: "Ping",   icn: "document-send",               act: "ping",   tip: "Send a ping to the phone" },
+                { lbl: "Mirror", icn: "preferences-desktop-display", act: "mirror", tip: "Mirror the screen (scrcpy over Wi-Fi)" }
             ]
 
             delegate: PhoneAction {
                 required property var modelData
-                lbl: (modelData.act === "mirror" && DashState.mirroring)
-                     ? "Stop" : modelData.lbl
-                icn: (modelData.act === "mirror" && DashState.mirroring)
-                     ? "window-close" : modelData.icn
+                lbl: (modelData.act === "mirror" && DashState.mirroring) ? "Stop" : modelData.lbl
+                icn: (modelData.act === "mirror" && DashState.mirroring) ? "window-close" : modelData.icn
                 tip: (modelData.act === "mirror" && DashState.mirroring)
                      ? "Stop the phone mirror" : modelData.tip
-                // the mirror goes over adb/Wi-Fi, so it stays usable even
-                // when KDE Connect reports the phone as offline
+                // mirroring goes over adb/Wi-Fi, so it stays usable even when
+                // KDE Connect reports the phone as offline
                 enabled: modelData.act === "mirror" ? panel.hasDevice : panel.reachable
-                sel: (modelData.act === "mirror" && DashState.mirroring)
-                  || (modelData.act === "notifs" && panel.tab.notifOpen)
+                sel: modelData.act === "mirror" && DashState.mirroring
                 onTriggered: {
                     if (modelData.act === "mirror") {
                         if (DashState.mirroring) {
@@ -628,41 +620,35 @@ ColumnLayout {
                             panel.tab.showPhoneToast("Closing the phone mirror", "window-close");
                         } else {
                             DashState.mirrorStart();
-                            panel.tab.showPhoneToast("Starting the phone mirror…", "smartphone");
+                            panel.tab.showPhoneToast("Starting the phone mirror…", "preferences-desktop-display");
                         }
-                    } else if (modelData.act === "notifs") {
-                        panel.tab.notifOpen = !panel.tab.notifOpen;
-                        if (panel.tab.notifOpen) { DashState.fetchPhoneNotifs(); }
-                    } else {
-                        DashState.phoneAction(modelData.act);
-                        if (modelData.act === "ring") {
-                            panel.tab.showPhoneToast("Ringing your phone…", "bell");
-                        } else if (modelData.act === "ping") {
-                            panel.tab.showPhoneToast("Ping sent", "preferences-desktop-notification");
-                        }
+                    } else if (modelData.act === "ring") {
+                        DashState.phoneAction("ring");
+                        panel.tab.showPhoneToast("Ringing your phone…", "notification-active");
+                    } else if (modelData.act === "ping") {
+                        DashState.phoneAction("ping");
+                        panel.tab.showPhoneToast("Ping sent", "document-send");
                     }
                 }
             }
         }
     }
 
+    // ================= things you read from the phone ====================
     PhoneLabel {
-        visible: panel.reachable
-        text2: "SEND TO PHONE"
+        visible: panel.hasDevice
+        text2: "FROM PHONE"
     }
 
-    // second row: send / share actions
     RowLayout {
-        visible: panel.reachable
+        visible: panel.hasDevice
         Layout.fillWidth: true
         spacing: 8
 
         Repeater {
             model: [
-                { lbl: "File",      icn: "document-send", act: "file",      tip: "Send a file to the phone"    },
-                { lbl: "Clipboard", icn: "edit-copy",     act: "clipboard", tip: "Send the desktop clipboard"  },
-                { lbl: "Browse",    icn: "folder-remote", act: "browse",    tip: "Browse phone storage"        },
-                { lbl: "Run",       icn: "system-run",    act: "commands",  tip: "Run a command on the phone"  }
+                { lbl: "Alerts",   icn: "notifications",   act: "notifs",   tip: "Read the phone's notifications" },
+                { lbl: "Messages", icn: "dialog-messages", act: "messages", tip: "Read & send SMS (KDE Connect SMS)" }
             ]
 
             delegate: PhoneAction {
@@ -670,23 +656,53 @@ ColumnLayout {
                 lbl: modelData.lbl
                 icn: modelData.icn
                 tip: modelData.tip
-                sel: modelData.act === "commands" && panel.tab.commandsOpen
+                enabled: panel.reachable
+                sel: modelData.act === "notifs" && panel.tab.notifOpen
+                onTriggered: {
+                    if (modelData.act === "notifs") {
+                        panel.tab.notifOpen = !panel.tab.notifOpen;
+                        if (panel.tab.notifOpen) { DashState.fetchPhoneNotifs(); }
+                    } else if (modelData.act === "messages") {
+                        DashState.phoneAction("messages");
+                        panel.tab.showPhoneToast("Opening SMS…", "dialog-messages");
+                    }
+                }
+            }
+        }
+    }
+
+    // ================= things you send to the phone ======================
+    PhoneLabel {
+        visible: panel.reachable
+        text2: "SEND TO PHONE"
+    }
+
+    RowLayout {
+        visible: panel.reachable
+        Layout.fillWidth: true
+        spacing: 8
+
+        Repeater {
+            model: [
+                { lbl: "File",      icn: "mail-attachment", act: "file",      tip: "Send a file to the phone" },
+                { lbl: "Clipboard", icn: "edit-copy",       act: "clipboard", tip: "Send the desktop clipboard" },
+                { lbl: "Browse",    icn: "folder-android",  act: "browse",    tip: "Browse phone storage" }
+            ]
+
+            delegate: PhoneAction {
+                required property var modelData
+                lbl: modelData.lbl
+                icn: modelData.icn
+                tip: modelData.tip
                 onTriggered: {
                     if (modelData.act === "file") {
                         DashState.phoneAction("sharefile");
-                    } else if (modelData.act === "commands") {
-                        panel.tab.commandsOpen = !panel.tab.commandsOpen;
-                        if (panel.tab.commandsOpen) {
-                            DashState.fetchPhoneCommands();
-                        } else {
-                            DashState.closePhoneCommands();
-                        }
                     } else {
                         DashState.phoneAction(modelData.act);
                         if (modelData.act === "clipboard") {
                             panel.tab.showPhoneToast("Clipboard sent to phone", "edit-copy");
                         } else if (modelData.act === "browse") {
-                            panel.tab.showPhoneToast("Mounting phone storage…", "folder-remote");
+                            panel.tab.showPhoneToast("Mounting phone storage…", "folder-android");
                         }
                     }
                 }
@@ -694,7 +710,7 @@ ColumnLayout {
         }
     }
 
-// inputs: send a link + type on the phone
+    // inputs: send a link + type on the phone
     ColumnLayout {
         visible: panel.reachable
         Layout.fillWidth: true
@@ -893,99 +909,7 @@ ColumnLayout {
         }
     }
 
-    // phone "Run commands" list — tap an entry to run it on the phone
-    PhoneSection {
-        open: panel.tab.commandsOpen && panel.reachable
-
-        SectionHeader {
-            title: "PHONE COMMANDS"
-            actionIcon: "view-refresh"
-            actionTip: "Reload commands"
-            closable: true
-            onActionClicked: DashState.fetchPhoneCommands()
-            onCloseClicked: panel.tab.commandsOpen = false
-        }
-
-        Text {
-            visible: DashState.phoneCommands.length === 0
-            Layout.fillWidth: true
-            text: "No commands found — enable the “Run commands” plugin for this PC in KDE Connect on your phone."
-            font.pixelSize: 10
-            wrapMode: Text.WordWrap
-            color: Qt.alpha(Kirigami.Theme.textColor, 0.45)
-        }
-
-        Repeater {
-            model: DashState.phoneCommands
-
-            delegate: Rectangle {
-                id: cmdRow
-                required property var modelData
-                Layout.fillWidth: true
-                implicitHeight: 38
-                radius: 10
-                color: cmdHover.hovered
-                       ? Qt.alpha(panel.tab.accent, 0.14)
-                       : Qt.alpha(Kirigami.Theme.textColor, 0.04)
-                border.width: 1
-                border.color: cmdHover.hovered
-                              ? Qt.alpha(panel.tab.accent, 0.35)
-                              : Qt.alpha(Kirigami.Theme.textColor, 0.07)
-                Behavior on color {
-                    ColorAnimation { duration: 120 }
-                }
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 8
-
-                    Kirigami.Icon {
-                        Layout.alignment: Qt.AlignVCenter
-                        source: "system-run"
-                        isMask: true
-                        implicitWidth: 14
-                        implicitHeight: 14
-                        color: cmdHover.hovered ? panel.tab.accent
-                             : Qt.alpha(Kirigami.Theme.textColor, 0.7)
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: cmdRow.modelData.name
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.85)
-                    }
-                    Kirigami.Icon {
-                        Layout.alignment: Qt.AlignVCenter
-                        source: "arrow-right"
-                        implicitWidth: 12
-                        implicitHeight: 12
-                        opacity: cmdHover.hovered ? 0.8 : 0.35
-                    }
-                }
-
-                HoverHandler {
-                    id: cmdHover
-                    cursorShape: Qt.PointingHandCursor
-                }
-                TapHandler {
-                    onTapped: {
-                        DashState.phoneAction("commandrun", cmdRow.modelData.id);
-                        panel.tab.showPhoneToast("Running " + cmdRow.modelData.name + "…", "system-run");
-                    }
-                }
-                QQC2.ToolTip {
-                    visible: cmdHover.hovered && cmdRow.modelData.id !== cmdRow.modelData.name
-                    text: cmdRow.modelData.id
-                    delay: 500
-                }
-            }
-        }
-    }
-
-// empty state
+    // empty state
     ColumnLayout {
         visible: !panel.hasDevice
         Layout.fillWidth: true
@@ -1006,7 +930,7 @@ ColumnLayout {
             }
             Kirigami.Icon {
                 anchors.centerIn: parent
-                source: "smartphone"
+                source: "phone"
                 isMask: true
                 color: panel.tab.accent
                 implicitWidth: 28
@@ -1045,7 +969,7 @@ ColumnLayout {
             PC3.Button {
                 Layout.fillWidth: true
                 text: "Open KDE Connect"
-                icon.name: "smartphone"
+                icon.name: "phone"
                 onClicked: DashState.openKdeConnect()
             }
         }

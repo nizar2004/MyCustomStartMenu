@@ -20,7 +20,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null
 
 notify() {
     command -v notify-send >/dev/null 2>&1 && \
-        notify-send -a "Custom Start Menu" -i "smartphone" "$1" "${2:-}" &
+        notify-send -a "Custom Start Menu" -i "phone" "$1" "${2:-}" &
 }
 
 # the phone's current wireless-debugging endpoint (ip:port or mDNS name).
